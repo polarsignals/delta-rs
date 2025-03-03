@@ -729,7 +729,7 @@ fn stats_field(idx: usize, num_indexed_cols: i32, field: &StructField) -> Option
         return None;
     }
     match field.data_type() {
-        DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
+        DataType::Dictionary(_) | DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => None,
         DataType::Struct(dt_struct) => Some(StructField::new(
             field.name(),
             StructType::new(

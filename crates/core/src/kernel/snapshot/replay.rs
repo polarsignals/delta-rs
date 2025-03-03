@@ -218,9 +218,23 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
                                 _ => panic!("unexpected scalar type"),
                             }))) as ArrayRef
                         }
+                        PrimitiveType::ULong => {
+                            Arc::new(UInt64Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::ULong(i) => Some(*i),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
                         PrimitiveType::Integer => {
                             Arc::new(Int32Array::from_iter(values.iter().map(|v| match v {
                                 Scalar::Integer(i) => Some(*i),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::UInteger => {
+                            Arc::new(UInt32Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::UInteger(i) => Some(*i),
                                 Scalar::Null(_) => None,
                                 _ => panic!("unexpected scalar type"),
                             }))) as ArrayRef
@@ -232,9 +246,23 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
                                 _ => panic!("unexpected scalar type"),
                             }))) as ArrayRef
                         }
+                        PrimitiveType::UShort => {
+                            Arc::new(UInt16Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::UShort(i) => Some(*i),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
                         PrimitiveType::Byte => {
                             Arc::new(Int8Array::from_iter(values.iter().map(|v| match v {
                                 Scalar::Byte(i) => Some(*i),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))) as ArrayRef
+                        }
+                        PrimitiveType::UByte => {
+                            Arc::new(UInt8Array::from_iter(values.iter().map(|v| match v {
+                                Scalar::UByte(i) => Some(*i),
                                 Scalar::Null(_) => None,
                                 _ => panic!("unexpected scalar type"),
                             }))) as ArrayRef

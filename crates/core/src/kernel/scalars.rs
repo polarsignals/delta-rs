@@ -34,9 +34,13 @@ impl ScalarExt for Scalar {
         match self {
             Self::String(s) => s.to_owned(),
             Self::Byte(b) => b.to_string(),
+            Self::UByte(b) => b.to_string(),
             Self::Short(s) => s.to_string(),
+            Self::UShort(s) => s.to_string(),
             Self::Integer(i) => i.to_string(),
+            Self::UInteger(i) => i.to_string(),
             Self::Long(l) => l.to_string(),
+            Self::ULong(l) => l.to_string(),
             Self::Float(f) => f.to_string(),
             Self::Double(d) => d.to_string(),
             Self::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
