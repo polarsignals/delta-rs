@@ -48,6 +48,10 @@ impl ScalarExt for Scalar {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
                 ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
             }
+            Self::TimestampNs(ts) => {
+                let ts = Utc.timestamp_nanos(*ts);
+                ts.format("%Y-%m-%d %H:%M:%S%.9f").to_string()
+            }
             Self::Date(days) => {
                 let date = DateTime::from_timestamp(*days as i64 * 24 * 3600, 0).unwrap();
                 date.format("%Y-%m-%d").to_string()
@@ -195,6 +199,10 @@ impl ScalarExt for Scalar {
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .map(|v| Self::Timestamp(v.clone().value(index))),
+            Timestamp(TimeUnit::Nanosecond, None) => arr
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .map(|v| Self::TimestampNs(v.value(index))),
             Struct(fields) => {
                 let struct_fields = fields
                     .iter()
@@ -244,15 +252,23 @@ impl ScalarExt for Scalar {
         match self {
             Self::String(s) => Value::String(s.to_owned()),
             Self::Byte(b) => Value::Number(serde_json::Number::from(*b)),
+            Self::UByte(b) => Value::Number(serde_json::Number::from(*b)),
             Self::Short(s) => Value::Number(serde_json::Number::from(*s)),
+            Self::UShort(s) => Value::Number(serde_json::Number::from(*s)),
             Self::Integer(i) => Value::Number(serde_json::Number::from(*i)),
+            Self::UInteger(i) => Value::Number(serde_json::Number::from(*i)),
             Self::Long(l) => Value::Number(serde_json::Number::from(*l)),
+            Self::ULong(l) => Value::Number(serde_json::Number::from(*l)),
             Self::Float(f) => Value::Number(serde_json::Number::from_f64(*f as f64).unwrap()),
             Self::Double(d) => Value::Number(serde_json::Number::from_f64(*d).unwrap()),
             Self::Boolean(b) => Value::Bool(*b),
             Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
                 Value::String(ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
+            }
+            Self::TimestampNs(ts) => {
+                let ts = Utc.timestamp_nanos(*ts);
+                Value::String(ts.format("%Y-%m-%d %H:%M:%S%.9f").to_string())
             }
             Self::Date(days) => {
                 let date = DateTime::from_timestamp(*days as i64 * 24 * 3600, 0).unwrap();

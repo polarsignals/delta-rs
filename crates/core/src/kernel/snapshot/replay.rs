@@ -302,10 +302,17 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
                                 _ => panic!("unexpected scalar type"),
                             }))) as ArrayRef
                         }
-
                         PrimitiveType::Timestamp => Arc::new(
                             TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
                                 Scalar::Timestamp(t) => Some(*t),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))
+                            .with_timezone("UTC"),
+                        ) as ArrayRef,
+                        PrimitiveType::TimestampNs => Arc::new(
+                            TimestampNanosecondArray::from_iter(values.iter().map(|v| match v {
+                                Scalar::TimestampNs(t) => Some(*t),
                                 Scalar::Null(_) => None,
                                 _ => panic!("unexpected scalar type"),
                             }))
