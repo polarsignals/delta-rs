@@ -41,6 +41,7 @@ use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionConfig;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::build_join_schema;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
@@ -50,10 +51,11 @@ use datafusion::{
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference};
+use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_expr::{
-    ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
-    UNNAMED_TABLE,
+    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, UNNAMED_TABLE,
 };
 
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
@@ -61,6 +63,7 @@ use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
+use tracing::field::debug;
 use tracing::log::*;
 use uuid::Uuid;
 
@@ -78,22 +81,23 @@ use crate::delta_datafusion::{
     DeltaSessionConfig, DeltaTableProvider,
 };
 
-use crate::kernel::{Action, DataCheck, Metadata, StructTypeExt};
+use crate::kernel::{Action, Metadata, StructTypeExt};
 use crate::logstore::LogStoreRef;
 use crate::operations::cast::merge_schema::{merge_arrow_field, merge_arrow_schema};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::transaction::CommitBuilder;
+use crate::operations::write::execution::write_execution_plan_v2;
+use crate::operations::write::generated_columns::{
+    add_generated_columns, add_missing_generated_columns,
+};
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::state::DeltaTableState;
-use crate::table::GeneratedColumn;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use writer::write_execution_plan_v2;
 
 mod barrier;
 mod filter;
-mod writer;
 
 const SOURCE_COLUMN: &str = "__delta_rs_source";
 const TARGET_COLUMN: &str = "__delta_rs_target";
@@ -776,72 +780,6 @@ async fn execute(
         None => TableReference::bare(UNNAMED_TABLE),
     };
 
-    /// Add generated column expressions to a dataframe
-    fn add_missing_generated_columns(
-        mut df: DataFrame,
-        generated_cols: &Vec<GeneratedColumn>,
-    ) -> DeltaResult<(DataFrame, Vec<String>)> {
-        let mut missing_cols = vec![];
-        for generated_col in generated_cols {
-            let col_name = generated_col.get_name();
-
-            if df
-                .clone()
-                .schema()
-                .field_with_unqualified_name(col_name)
-                .is_err()
-            // implies it doesn't exist
-            {
-                debug!(
-                    "Adding missing generated column {} in source as placeholder",
-                    col_name
-                );
-                // If column doesn't exist, we add a null column, later we will generate the values after
-                // all the merge is projected.
-                // Other generated columns that were provided upon the start we only validate during write
-                missing_cols.push(col_name.to_string());
-                df = df
-                    .clone()
-                    .with_column(col_name, Expr::Literal(ScalarValue::Null))?;
-            }
-        }
-        Ok((df, missing_cols))
-    }
-
-    /// Add generated column expressions to a dataframe
-    fn add_generated_columns(
-        mut df: DataFrame,
-        generated_cols: &Vec<GeneratedColumn>,
-        generated_cols_missing_in_source: &[String],
-        state: &SessionState,
-    ) -> DeltaResult<DataFrame> {
-        debug!("Generating columns in dataframe");
-        for generated_col in generated_cols {
-            // We only validate columns that were missing from the start. We don't update
-            // update generated columns that were provided during runtime
-            if !generated_cols_missing_in_source.contains(&generated_col.name) {
-                continue;
-            }
-
-            let generation_expr = state.create_logical_expr(
-                generated_col.get_generation_expression(),
-                df.clone().schema(),
-            )?;
-            let col_name = generated_col.get_name();
-
-            df = df.clone().with_column(
-                generated_col.get_name(),
-                when(col(col_name).is_null(), generation_expr)
-                    .otherwise(col(col_name))?
-                    .cast_to(
-                        &arrow_schema::DataType::try_from(&generated_col.data_type)?,
-                        df.schema(),
-                    )?,
-            )?
-        }
-        Ok(df)
-    }
-
     let generated_col_expressions = snapshot
         .schema()
         .get_generated_columns()
@@ -910,11 +848,32 @@ async fn execute(
             streaming,
         )
         .await?
+    }
+    .map(|e| {
+        // simplify the expression so we have
+        let props = ExecutionProps::new();
+        let simplify_context = SimplifyContext::new(&props).with_schema(target.schema().clone());
+        let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
+        simplifier.simplify(e).unwrap()
+    });
+
+    // Predicate will be used for conflict detection
+    let commit_predicate = match target_subset_filter.clone() {
+        None => None, // No predicate means it's a full table merge
+        Some(some_filter) => {
+            let predict_expr = match &target_alias {
+                None => some_filter,
+                Some(alias) => remove_table_alias(some_filter, alias),
+            };
+            Some(fmt_expr_to_sql(&predict_expr)?)
+        }
     };
+
+    debug!("Using target subset filter: {:?}", commit_predicate);
 
     let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
     // Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS
-    let target = match target_subset_filter.clone() {
+    let target = match target_subset_filter {
         Some(filter) => {
             let filter = match &target_alias {
                 Some(alias) => remove_table_alias(filter, alias),
@@ -1473,18 +1432,6 @@ async fn execute(
         app_metadata.insert("operationMetrics".to_owned(), map);
     }
 
-    // Predicate will be used for conflict detection
-    let commit_predicate = match target_subset_filter {
-        None => None, // No predicate means it's a full table merge
-        Some(some_filter) => {
-            let predict_expr = match &target_alias {
-                None => some_filter,
-                Some(alias) => remove_table_alias(some_filter, alias),
-            };
-            Some(fmt_expr_to_sql(&predict_expr)?)
-        }
-    };
-
     // Do not make a commit when there are zero updates to the state
     let operation = DeltaOperation::Merge {
         predicate: commit_predicate,
@@ -1528,7 +1475,7 @@ fn modify_schema(
             return Err(DeltaTableError::Arrow { source: error });
         }
 
-        if let Some(target_field) = target_schema.field_from_column(columns).ok() {
+        if let Ok(target_field) = target_schema.field_from_column(columns) {
             // for nested data types we need to first merge then see if there a change then replace the pre-existing field
             let new_field = merge_arrow_field(target_field, source_field, true)?;
             if &new_field == target_field {
@@ -1639,7 +1586,6 @@ mod tests {
     use arrow_schema::DataType as ArrowDataType;
     use arrow_schema::Field;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::*;
     use datafusion_common::Column;
     use datafusion_common::TableReference;
@@ -2589,7 +2535,7 @@ mod tests {
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(
             parameters["predicate"],
-            "id BETWEEN 'B' AND 'C' AND modified = '2021-02-02'"
+            "id >= 'B' AND id <= 'C' AND modified = '2021-02-02'"
         );
         assert_eq!(
             parameters["mergePredicate"],
@@ -2840,7 +2786,7 @@ mod tests {
             extra_info["operationMetrics"],
             serde_json::to_value(&metrics).unwrap()
         );
-        assert_eq!(parameters["predicate"], "id BETWEEN 'B' AND 'X'");
+        assert_eq!(parameters["predicate"], "id >= 'B' AND id <= 'X'");
         assert_eq!(parameters["mergePredicate"], json!("target.id = source.id"));
         assert_eq!(
             parameters["matchedPredicates"],
@@ -3259,7 +3205,7 @@ mod tests {
 
         assert_eq!(
             parameters["predicate"],
-            json!("id BETWEEN 'B' AND 'X' AND modified = '2021-02-02'")
+            json!("id >= 'B' AND id <= 'X' AND modified = '2021-02-02'")
         );
 
         let expected = vec![
@@ -3343,7 +3289,7 @@ mod tests {
 
         assert_eq!(
             parameters["predicate"],
-            json!("id BETWEEN 'B' AND 'X' AND modified = '2021-02-02'")
+            json!("id >= 'B' AND id <= 'X' AND modified = '2021-02-02'")
         );
 
         let expected = vec![
@@ -4080,9 +4026,8 @@ mod tests {
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 
@@ -4198,9 +4143,8 @@ mod tests {
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 
@@ -4287,9 +4231,8 @@ mod tests {
         let ctx = SessionContext::new();
         let table = DeltaOps(table)
             .load_cdf()
-            .with_session_ctx(ctx.clone())
             .with_starting_version(0)
-            .build()
+            .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 

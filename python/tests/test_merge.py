@@ -7,10 +7,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import CommitProperties, DeltaTable, write_deltalake
 from deltalake.exceptions import DeltaProtocolError
-from deltalake.schema import ArrowSchemaConversionMode, convert_pyarrow_table
-from deltalake.table import CommitProperties
 
 
 @pytest.mark.parametrize("streaming", (True, False))
@@ -28,11 +26,6 @@ def test_merge_when_matched_delete_wo_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
     dt.merge(
         source=source_table,
@@ -40,6 +33,7 @@ def test_merge_when_matched_delete_wo_predicate(
         source_alias="s",
         target_alias="t",
         commit_properties=commit_properties,
+        streamed_exec=streaming,
     ).when_matched_delete().execute()
 
     nrows = 4
@@ -77,16 +71,12 @@ def test_merge_when_matched_delete_with_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
+        streamed_exec=streaming,
     ).when_matched_delete("s.deleted = True").execute()
 
     nrows = 4
@@ -121,16 +111,12 @@ def test_merge_when_matched_update_wo_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
+        streamed_exec=streaming,
     ).when_matched_update({"price": "s.price", "sold": "s.sold"}).execute()
 
     expected = pa.table(
@@ -209,16 +195,12 @@ def test_merge_when_matched_update_all_wo_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
+        streamed_exec=streaming,
     ).when_matched_update_all().execute()
 
     expected = pa.table(
@@ -254,16 +236,12 @@ def test_merge_when_matched_update_all_with_exclude(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
+        streamed_exec=streaming,
     ).when_matched_update_all(except_cols=["sold"]).execute()
 
     expected = pa.table(
@@ -298,16 +276,12 @@ def test_merge_when_matched_update_with_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_matched_update(
         updates={"price": "source.price", "sold": "source.sold"},
         predicate="source.deleted = False",
@@ -345,16 +319,12 @@ def test_merge_when_not_matched_insert_wo_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_not_matched_insert(
         updates={
             "id": "source.id",
@@ -396,16 +366,12 @@ def test_merge_when_not_matched_insert_with_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_not_matched_insert(
         updates={
             "id": "source.id",
@@ -499,16 +465,12 @@ def test_merge_when_not_matched_insert_all_with_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_not_matched_insert_all(
         predicate="source.price < 50",
     ).execute()
@@ -545,16 +507,12 @@ def test_merge_when_not_matched_insert_all_with_exclude(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_not_matched_insert_all(except_cols=["sold"]).execute()
 
     expected = pa.table(
@@ -631,16 +589,12 @@ def test_merge_when_not_matched_insert_all_with_predicate_special_column_names(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.`1id` = source.`1id`",
+        streamed_exec=streaming,
     ).when_not_matched_insert_all(
         predicate="source.price < 50",
     ).execute()
@@ -677,16 +631,12 @@ def test_merge_when_not_matched_by_source_update_wo_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_not_matched_by_source_update(
         updates={
             "sold": "int'10'",
@@ -725,16 +675,12 @@ def test_merge_when_not_matched_by_source_update_with_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_not_matched_by_source_update(
         updates={
             "sold": "int'10'",
@@ -773,17 +719,12 @@ def test_merge_when_not_matched_by_source_delete_with_predicate(
             "deleted": pa.array([False, False]),
         }
     )
-
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_not_matched_by_source_delete(predicate="target.price > 3").execute()
 
     expected = pa.table(
@@ -816,16 +757,12 @@ def test_merge_when_not_matched_by_source_delete_wo_predicate(
         {"id": pa.array(["4", "5"]), "weight": pa.array([1.5, 1.6], pa.float64())}
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_not_matched_by_source_delete().execute()
 
     expected = pa.table(
@@ -863,16 +800,12 @@ def test_merge_multiple_when_matched_update_with_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_matched_update(
         updates={"price": "source.price", "sold": "source.sold"},
         predicate="source.deleted = False",
@@ -913,16 +846,12 @@ def test_merge_multiple_when_matched_update_all_with_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_matched_update_all(
         predicate="source.deleted = False",
     ).when_matched_update_all(
@@ -961,16 +890,12 @@ def test_merge_multiple_when_not_matched_insert_with_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_not_matched_insert(
         updates={
             "id": "source.id",
@@ -1022,16 +947,12 @@ def test_merge_multiple_when_matched_delete_with_predicate(
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     dt.merge(
         source=source_table,
         predicate="t.id = s.id",
         source_alias="s",
         target_alias="t",
+        streamed_exec=streaming,
     ).when_matched_delete("s.deleted = True").when_matched_delete(
         "s.deleted = false"
     ).execute()
@@ -1071,16 +992,13 @@ def test_merge_multiple_when_not_matched_by_source_update_wo_predicate(
             "deleted": pa.array([False, False]),
         }
     )
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
 
     dt.merge(
         source=source_table,
         source_alias="source",
         target_alias="target",
         predicate="target.id = source.id",
+        streamed_exec=streaming,
     ).when_not_matched_by_source_update(
         updates={
             "sold": "int'10'",
@@ -1131,15 +1049,12 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
     )
 
     expected = data
-
-    if streaming:
-        data = convert_pyarrow_table(data, ArrowSchemaConversionMode.PASSTHROUGH)
-
     dt.merge(
         data,
         predicate="s.date = t.date",
         source_alias="s",
         target_alias="t",
+        streamed_exec=streaming,
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
     result = dt.to_pyarrow_table()
@@ -1150,7 +1065,7 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
     if not streaming:
         assert (
             last_action["operationParameters"].get("predicate")
-            == "'2022-02-01'::date = date"
+            == "date = '2022-02-01'::date"
         )
     else:
         # In streaming mode we don't use aggregated stats of the source in the predicate
@@ -1162,11 +1077,11 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
     [
         (
             None,
-            "arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, None)') = datetime",
+            "datetime = arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, None)')",
         ),
         (
             "UTC",
-            "arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, Some(\"UTC\"))') = datetime",
+            "datetime = arrow_cast('2022-02-01T00:00:00.000000', 'Timestamp(Microsecond, Some(\"UTC\"))')",
         ),
     ],
 )
@@ -1200,6 +1115,7 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
         predicate="s.datetime = t.datetime",
         source_alias="s",
         target_alias="t",
+        streamed_exec=False,  # only with streamed execution off can we use stats to create a pruning predicate
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
     result = dt.to_pyarrow_table()
@@ -1211,10 +1127,7 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
 
 
 @pytest.mark.parametrize("streaming", (True, False))
-@pytest.mark.parametrize("engine", ["pyarrow", "rust"])
-def test_merge_stats_columns_stats_provided(
-    tmp_path: pathlib.Path, engine, streaming: bool
-):
+def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: bool):
     data = pa.table(
         {
             "foo": pa.array(["a", "b", None, None]),
@@ -1226,7 +1139,6 @@ def test_merge_stats_columns_stats_provided(
         tmp_path,
         data,
         mode="append",
-        engine=engine,
         configuration={"delta.dataSkippingStatsColumns": "foo,baz"},
     )
     dt = DeltaTable(tmp_path)
@@ -1251,14 +1163,12 @@ def test_merge_stats_columns_stats_provided(
         }
     )
 
-    if streaming:
-        data = convert_pyarrow_table(data, ArrowSchemaConversionMode.PASSTHROUGH)
-
     dt.merge(
         data,
         predicate="source.foo = target.foo",
         source_alias="source",
         target_alias="target",
+        streamed_exec=streaming,
     ).when_matched_update_all().execute()
 
     dt = DeltaTable(tmp_path)
@@ -1369,17 +1279,13 @@ def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
         }
     )
 
-    if streaming:
-        source_table = convert_pyarrow_table(
-            source_table, ArrowSchemaConversionMode.PASSTHROUGH
-        )
-
     metrics = (
         dt.merge(
             source=source_table,
             predicate="t.id = s.id and t.partition in (3,4)",
             source_alias="s",
             target_alias="t",
+            streamed_exec=streaming,
         )
         .when_matched_update_all()
         .execute()
@@ -1425,14 +1331,12 @@ def test_cdc_merge_planning_union_2908(tmp_path, streaming: bool):
         },
     )
 
-    if streaming:
-        table = convert_pyarrow_table(table, ArrowSchemaConversionMode.PASSTHROUGH)
-
     dt.merge(
         source=table,
         predicate="s.id = t.id",
         source_alias="s",
         target_alias="t",
+        streamed_exec=streaming,
     ).when_not_matched_insert_all().execute()
 
     last_action = dt.history(1)[0]
@@ -1533,6 +1437,7 @@ def test_merge_on_decimal_3033(tmp_path):
         predicate="target.timestamp = source.timestamp",
         source_alias="source",
         target_alias="target",
+        streamed_exec=False,
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
     dt.merge(
@@ -1540,13 +1445,14 @@ def test_merge_on_decimal_3033(tmp_path):
         predicate="target.timestamp = source.timestamp AND target.altitude = source.altitude",
         source_alias="source",
         target_alias="target",
+        streamed_exec=False,  # only with streamed execution off can we use stats to create a pruning predicate
     ).when_matched_update_all().when_not_matched_insert_all().execute()
 
     string_predicate = dt.history(1)[0]["operationParameters"]["predicate"]
 
     assert (
         string_predicate
-        == "timestamp BETWEEN arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND altitude BETWEEN '1505'::decimal(4, 1) AND '1505'::decimal(4, 1)"
+        == "timestamp >= arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND timestamp <= arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND altitude >= '1505'::decimal(4, 1) AND altitude <= '1505'::decimal(4, 1)"
     )
 
 

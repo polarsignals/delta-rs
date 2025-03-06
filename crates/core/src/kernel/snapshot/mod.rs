@@ -656,8 +656,7 @@ fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<Str
                 Some(field) => match field.data_type() {
                     DataType::Map(_) | DataType::Array(_) | &DataType::BINARY => {
                         Err(DeltaTableError::Generic(format!(
-                            "Stats column {} has unsupported type {}",
-                            col,
+                            "Stats column {col} has unsupported type {}",
                             field.data_type()
                         )))
                     }
@@ -668,8 +667,7 @@ fn stats_schema(schema: &StructType, config: TableConfig<'_>) -> DeltaResult<Str
                     )),
                 },
                 _ => Err(DeltaTableError::Generic(format!(
-                    "Stats column {} not found in schema",
-                    col
+                    "Stats column {col} not found in schema"
                 ))),
             })
             .collect::<Result<Vec<_>, _>>()?
@@ -706,10 +704,7 @@ pub(crate) fn partitions_schema(
             .iter()
             .map(|col| {
                 schema.field(col).cloned().ok_or_else(|| {
-                    DeltaTableError::Generic(format!(
-                        "Partition column {} not found in schema",
-                        col
-                    ))
+                    DeltaTableError::Generic(format!("Partition column {col} not found in schema"))
                 })
             })
             .collect::<Result<Vec<_>, _>>()?,

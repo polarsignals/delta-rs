@@ -129,15 +129,11 @@ impl DeltaFileSystemHandler {
         paths: Vec<String>,
         py: Python<'py>,
     ) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        let fs = PyModule::import_bound(py, "pyarrow.fs")?;
+        let fs = PyModule::import(py, "pyarrow.fs")?;
         let file_types = fs.getattr("FileType")?;
 
         let to_file_info = |loc: &str, type_: &Bound<'py, PyAny>, kwargs: &HashMap<&str, i64>| {
-            fs.call_method(
-                "FileInfo",
-                (loc, type_),
-                Some(&kwargs.into_py_dict_bound(py)),
-            )
+            fs.call_method("FileInfo", (loc, type_), Some(&kwargs.into_py_dict(py)?))
         };
 
         let mut infos = Vec::new();
@@ -199,15 +195,11 @@ impl DeltaFileSystemHandler {
         recursive: bool,
         py: Python<'py>,
     ) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        let fs = PyModule::import_bound(py, "pyarrow.fs")?;
+        let fs = PyModule::import(py, "pyarrow.fs")?;
         let file_types = fs.getattr("FileType")?;
 
         let to_file_info = |loc: String, type_: &Bound<'py, PyAny>, kwargs: HashMap<&str, i64>| {
-            fs.call_method(
-                "FileInfo",
-                (loc, type_),
-                Some(&kwargs.into_py_dict_bound(py)),
-            )
+            fs.call_method("FileInfo", (loc, type_), Some(&kwargs.into_py_dict(py)?))
         };
 
         let path = Self::parse_path(&base_dir);
@@ -313,9 +305,8 @@ impl DeltaFileSystemHandler {
                 py,
                 "UserWarning",
                 format!(
-                    "You specified a `max_buffer_size` of {} bits less than {} bits. Most object 
+                    "You specified a `max_buffer_size` of {max_buffer_size} bits less than {DEFAULT_MAX_BUFFER_SIZE} bits. Most object
                     stores expect greater than that number, you may experience issues",
-                    max_buffer_size, DEFAULT_MAX_BUFFER_SIZE
                 )
                 .as_str(),
                 Some(2),
@@ -493,7 +484,7 @@ impl ObjectInputFile {
         // TODO: PyBytes copies the buffer. If we move away from the limited CPython
         // API (the stable C API), we could implement the buffer protocol for
         // bytes::Bytes and return this zero-copy.
-        Ok(PyBytes::new_bound(py, data.as_ref()))
+        Ok(PyBytes::new(py, data.as_ref()))
     }
 
     fn fileno(&self) -> PyResult<()> {

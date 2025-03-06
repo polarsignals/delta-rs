@@ -124,12 +124,11 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .ok_or_else(|| DeltaTableError::Generic("No Expression provided".to_string()))?;
 
             let mut metadata = this.snapshot.metadata().clone();
-            let configuration_key = format!("delta.constraints.{}", name);
+            let configuration_key = format!("delta.constraints.{name}");
 
             if metadata.configuration.contains_key(&configuration_key) {
                 return Err(DeltaTableError::Generic(format!(
-                    "Constraint with name: {} already exists",
-                    name
+                    "Constraint with name: {name} already exists"
                 )));
             }
 
@@ -180,10 +179,9 @@ impl std::future::IntoFuture for ConstraintBuilder {
             // We have validated the table passes it's constraints, now to add the constraint to
             // the table.
 
-            metadata.configuration.insert(
-                format!("delta.constraints.{}", name),
-                Some(expr_str.clone()),
-            );
+            metadata
+                .configuration
+                .insert(format!("delta.constraints.{name}"), Some(expr_str.clone()));
 
             let old_protocol = this.snapshot.protocol();
             let protocol = Protocol {
@@ -272,6 +270,32 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned()
+    }
+
+    #[tokio::test]
+    async fn test_get_constraints_with_correct_names() -> DeltaResult<()> {
+        // The key of a constraint is allowed to be custom
+        // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#check-constraints
+        let batch = get_record_batch(None, false);
+        let write = DeltaOps(create_bare_table())
+            .write(vec![batch.clone()])
+            .await?;
+        let table = DeltaOps(write);
+
+        let constraint = table
+            .add_constraint()
+            .with_constraint("my_custom_constraint", "value < 100")
+            .await;
+        assert!(constraint.is_ok());
+        let constraints = constraint
+            .unwrap()
+            .state
+            .unwrap()
+            .table_config()
+            .get_constraints();
+        assert!(constraints.len() == 1);
+        assert_eq!(constraints[0].name, "my_custom_constraint");
+        Ok(())
     }
 
     #[tokio::test]

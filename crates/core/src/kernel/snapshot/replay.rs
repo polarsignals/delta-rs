@@ -168,8 +168,7 @@ fn parse_partitions(batch: RecordBatch, partition_schema: &StructType) -> DeltaR
                 let field = partition_schema
                     .field(k.as_str())
                     .ok_or(DeltaTableError::generic(format!(
-                        "Partition column {} not found in schema.",
-                        k
+                        "Partition column {k} not found in schema."
                     )))?;
                 let field_type = match field.data_type() {
                     DataType::Primitive(p) => Ok(p),
@@ -483,11 +482,11 @@ fn seen_key(info: &FileInfo<'_>) -> String {
         }
         if let Some(offset) = &dv.offset {
             format!(
-                "{}::{}{}@{offset}",
-                path, dv.storage_type, dv.path_or_inline_dv
+                "{path}::{}{}@{offset}",
+                dv.storage_type, dv.path_or_inline_dv
             )
         } else {
-            format!("{}::{}{}", path, dv.storage_type, dv.path_or_inline_dv)
+            format!("{path}::{}{}", dv.storage_type, dv.path_or_inline_dv)
         }
     } else {
         path.to_string()
@@ -551,10 +550,7 @@ impl LogReplayScanner {
                     // NOTE: there should always be only one action per row.
                     (None, None) => debug!("WARNING: no action found for row"),
                     (Some(a), Some(r)) => {
-                        debug!(
-                            "WARNING: both add and remove actions found for row: {:?} {:?}",
-                            a, r
-                        )
+                        debug!("WARNING: both add and remove actions found for row: {a:?} {r:?}",)
                     }
                 }
             }

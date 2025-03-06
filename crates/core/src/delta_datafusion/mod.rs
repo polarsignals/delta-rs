@@ -47,15 +47,17 @@ use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, 
 use datafusion::execution::context::{SessionConfig, SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
-    config::ConfigOptions, Column, Constraints, DFSchema, DataFusionError,
-    Result as DataFusionResult, TableReference, ToDFSchema,
+    config::ConfigOptions, Column, DFSchema, DataFusionError, Result as DataFusionResult,
+    TableReference, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
@@ -97,6 +99,8 @@ pub mod expr;
 pub mod logical;
 pub mod physical;
 pub mod planner;
+
+pub use cdf::scan::DeltaCdfTableProvider;
 
 mod schema_adapter;
 
@@ -415,8 +419,7 @@ impl DeltaScanConfigBuilder {
                 Some(name) => {
                     if column_names.contains(name) {
                         return Err(DeltaTableError::Generic(format!(
-                            "Unable to add file path column since column with name {} exits",
-                            name
+                            "Unable to add file path column since column with name {name} exits"
                         )));
                     }
 
@@ -429,7 +432,7 @@ impl DeltaScanConfigBuilder {
 
                     while column_names.contains(&name) {
                         idx += 1;
-                        name = format!("{}_{}", prefix, idx);
+                        name = format!("{prefix}_{idx}");
                     }
 
                     Some(name)
@@ -544,9 +547,19 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let context = SessionContext::new();
         let df_schema = logical_schema.clone().to_dfschema()?;
-        let logical_filter = self
-            .filter
-            .map(|expr| context.create_physical_expr(expr, &df_schema).unwrap());
+
+        let logical_filter = self.filter.map(|expr| {
+            // Simplify the expression first
+            let props = ExecutionProps::new();
+            let simplify_context =
+                SimplifyContext::new(&props).with_schema(df_schema.clone().into());
+            let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
+            let simplified = simplifier.simplify(expr).unwrap();
+
+            context
+                .create_physical_expr(simplified, &df_schema)
+                .unwrap()
+        });
 
         // Perform Pruning of files to scan
         let (files, files_scanned, files_pruned) = match self.files {
@@ -647,25 +660,24 @@ impl<'a> DeltaScanBuilder<'a> {
             ..Default::default()
         };
 
-        let mut exec_plan_builder = ParquetExecBuilder::new(FileScanConfig {
-            object_store_url: self.log_store.object_store_url(),
-            file_schema,
-            // If all files were filtered out, we still need to emit at least one partition to
-            // pass datafusion sanity checks.
-            //
-            // See https://github.com/apache/datafusion/issues/11322
-            file_groups: if file_groups.is_empty() {
-                vec![vec![]]
-            } else {
-                file_groups.into_values().collect()
-            },
-            constraints: Constraints::default(),
-            statistics: stats,
-            projection: self.projection.cloned(),
-            limit: self.limit,
-            table_partition_cols,
-            output_ordering: vec![],
-        })
+        let mut exec_plan_builder = ParquetExecBuilder::new(
+            FileScanConfig::new(self.log_store.object_store_url(), file_schema)
+                .with_file_groups(
+                    // If all files were filtered out, we still need to emit at least one partition to
+                    // pass datafusion sanity checks.
+                    //
+                    // See https://github.com/apache/datafusion/issues/11322
+                    if file_groups.is_empty() {
+                        vec![vec![]]
+                    } else {
+                        file_groups.into_values().collect()
+                    },
+                )
+                .with_statistics(stats)
+                .with_projection(self.projection.cloned())
+                .with_limit(self.limit)
+                .with_table_partition_cols(table_partition_cols),
+        )
         .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))
         .with_table_parquet_options(parquet_options);
 
@@ -909,7 +921,7 @@ impl TableProvider for LazyTableProvider {
             if projection != &current_projection {
                 let execution_props = &ExecutionProps::new();
                 let fields: DeltaResult<Vec<(Arc<dyn PhysicalExpr>, String)>> = projection
-                    .into_iter()
+                    .iter()
                     .map(|i| {
                         let (table_ref, field) = df_schema.qualified_field(*i);
                         create_physical_expr(
@@ -1110,8 +1122,7 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
         | ArrowDataType::LargeListView(_)
         | ArrowDataType::ListView(_)
         | ArrowDataType::Map(_, _) => Err(DeltaTableError::Generic(format!(
-            "Unsupported data type for Delta Lake {}",
-            t
+            "Unsupported data type for Delta Lake {t}"
         ))),
     }
 }
@@ -1416,10 +1427,14 @@ impl DeltaDataChecker {
                 ));
             }
 
+            let field_to_select = if check.as_any().is::<Constraint>() {
+                "*"
+            } else {
+                check.get_name()
+            };
             let sql = format!(
-                "SELECT {} FROM `{}` WHERE NOT ({}) LIMIT 1",
-                check.get_name(),
-                table_name,
+                "SELECT {} FROM `{table_name}` WHERE NOT ({}) LIMIT 1",
+                field_to_select,
                 check.get_expression()
             );
 
@@ -1432,9 +1447,8 @@ impl DeltaDataChecker {
                     .join(", ");
 
                 let msg = format!(
-                    "Check or Invariant ({}) violated by value in row: [{}]",
+                    "Check or Invariant ({}) violated by value in row: [{value}]",
                     check.get_expression(),
-                    value
                 );
                 violations.push(msg);
             }
@@ -1620,8 +1634,7 @@ impl TreeNodeVisitor<'_> for FindFilesExprProperties {
             }
             _ => {
                 self.result = Err(DeltaTableError::Generic(format!(
-                    "Find files predicate contains unsupported expression {}",
-                    expr
+                    "Find files predicate contains unsupported expression {expr}"
                 )));
                 return Ok(TreeNodeRecursion::Stop);
             }
@@ -1668,8 +1681,7 @@ fn join_batches_with_add_actions(
 
         for path in iter {
             let path = path.ok_or(DeltaTableError::Generic(format!(
-                "{} cannot be null",
-                path_column
+                "{path_column} cannot be null"
             )))?;
 
             match actions.remove(path) {
@@ -2163,6 +2175,59 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_enforce_constraints() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", ArrowDataType::Utf8, false),
+            Field::new("b", ArrowDataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c", "d"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+            ],
+        )
+        .unwrap();
+        // Empty constraints is okay
+        let constraints: Vec<Constraint> = vec![];
+        assert!(DeltaDataChecker::new_with_constraints(constraints)
+            .check_batch(&batch)
+            .await
+            .is_ok());
+
+        // Valid invariants return Ok(())
+        let constraints = vec![
+            Constraint::new("custom_a", "a is not null"),
+            Constraint::new("custom_b", "b < 1000"),
+        ];
+        assert!(DeltaDataChecker::new_with_constraints(constraints)
+            .check_batch(&batch)
+            .await
+            .is_ok());
+
+        // Violated invariants returns an error with list of violations
+        let constraints = vec![
+            Constraint::new("custom_a", "a is null"),
+            Constraint::new("custom_B", "b < 100"),
+        ];
+        let result = DeltaDataChecker::new_with_constraints(constraints)
+            .check_batch(&batch)
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
+        if let Err(DeltaTableError::InvalidData { violations }) = result {
+            assert_eq!(violations.len(), 2);
+        }
+
+        // Irrelevant constraints return a different error
+        let constraints = vec![Constraint::new("custom_c", "c > 2000")];
+        let result = DeltaDataChecker::new_with_constraints(constraints)
+            .check_batch(&batch)
+            .await;
+        assert!(result.is_err());
     }
 
     #[test]
@@ -2867,6 +2932,7 @@ mod tests {
         let expected = vec![
             ObjectStoreOperation::GetRange(LocationType::Data, 4920..4928),
             ObjectStoreOperation::GetRange(LocationType::Data, 2399..4920),
+            #[expect(clippy::single_range_in_vec_init)]
             ObjectStoreOperation::GetRanges(LocationType::Data, vec![4..58]),
         ];
         let mut actual = Vec::new();
@@ -2921,7 +2987,7 @@ mod tests {
             } else if value.to_string().starts_with("part-") {
                 LocationType::Data
             } else {
-                panic!("Unknown location type: {:?}", value)
+                panic!("Unknown location type: {value:?}")
             }
         }
     }

@@ -111,6 +111,12 @@ impl Metadata {
         self
     }
 
+    /// set the table ID in the metadata action
+    pub fn with_table_id(mut self, id: String) -> Self {
+        self.id = id;
+        self
+    }
+
     /// get the table schema
     pub fn schema(&self) -> DeltaResult<StructType> {
         Ok(serde_json::from_str(&self.schema_string)?)
@@ -323,8 +329,7 @@ impl Protocol {
                 parsed_properties.insert(parsed_key, value.to_string());
             } else if raise_if_not_exists {
                 return Err(Error::Generic(format!(
-                    "Error parsing property '{}':'{}'",
-                    key, value
+                    "Error parsing property '{key}':'{value}'",
                 )));
             }
         }
@@ -340,17 +345,11 @@ impl Protocol {
                         }
                     }
                     _ => {
-                        return Err(Error::Generic(format!(
-                        "delta.minReaderVersion = '{}' is invalid, valid values are ['1','2','3']",
-                        min_reader_version
-                    )))
+                        return Err(Error::Generic(format!("delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']")))
                     }
                 },
                 Err(_) => {
-                    return Err(Error::Generic(format!(
-                        "delta.minReaderVersion = '{}' is invalid, valid values are ['1','2','3']",
-                        min_reader_version
-                    )))
+                    return Err(Error::Generic(format!("delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']")))
                 }
             }
         }
@@ -366,17 +365,11 @@ impl Protocol {
                         }
                     }
                     _ => {
-                        return Err(Error::Generic(format!(
-                            "delta.minWriterVersion = '{}' is invalid, valid values are ['2','3','4','5','6','7']",
-                            min_writer_version
-                        )))
+                        return Err(Error::Generic(format!("delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']")))
                     }
                 },
                 Err(_) => {
-                    return Err(Error::Generic(format!(
-                        "delta.minWriterVersion = '{}' is invalid, valid values are ['2','3','4','5','6','7']",
-                        min_writer_version
-                    )))
+                    return Err(Error::Generic(format!("delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']")))
                 }
             }
         }
@@ -403,10 +396,7 @@ impl Protocol {
                 }
                 Ok(false) => {}
                 _ => {
-                    return Err(Error::Generic(format!(
-                        "delta.enableChangeDataFeed = '{}' is invalid, valid values are ['true']",
-                        enable_cdf
-                    )))
+                    return Err(Error::Generic(format!("delta.enableChangeDataFeed = '{enable_cdf}' is invalid, valid values are ['true']")))
                 }
             }
         }
@@ -436,10 +426,7 @@ impl Protocol {
                 }
                 Ok(false) => {}
                 _ => {
-                    return Err(Error::Generic(format!(
-                        "delta.enableDeletionVectors = '{}' is invalid, valid values are ['true']",
-                        enable_dv
-                    )))
+                    return Err(Error::Generic(format!("delta.enableDeletionVectors = '{enable_dv}' is invalid, valid values are ['true']")))
                 }
             }
         }
@@ -687,14 +674,13 @@ impl DeletionVectorDescriptor {
                 let mut dv_suffix = format!("deletion_vector_{uuid}.bin");
                 if prefix_len > 0 {
                     dv_suffix = format!(
-                        "{}/{}",
+                        "{}/{dv_suffix}",
                         &self.path_or_inline_dv[..(prefix_len as usize)],
-                        dv_suffix
                     );
                 }
                 let dv_path = parent
                     .join(&dv_suffix)
-                    .map_err(|_| Error::DeletionVector(format!("invalid path: {}", dv_suffix)))?;
+                    .map_err(|_| Error::DeletionVector(format!("invalid path: {dv_suffix}")))?;
                 Ok(Some(dv_path))
             }
             StorageType::AbsolutePath => {
@@ -743,7 +729,7 @@ impl DeletionVectorDescriptor {
     //                 i32::from_le_bytes(buf.try_into().map_err(|_| {
     //                     Error::DeletionVector("filed to read magic bytes".to_string())
     //                 })?);
-    //             println!("magic  --> : {}", magic);
+    //             println!("magic  --> : {magic}");
     //             // assert!(magic == 1681511377);
     //
     //             let mut buf = vec![0; size_in_bytes as usize];
@@ -1221,7 +1207,7 @@ mod tests {
     #[test]
     fn test_primitive() {
         let types: PrimitiveType = serde_json::from_str("\"string\"").unwrap();
-        println!("{:?}", types);
+        println!("{types:?}");
     }
 
     // #[test]

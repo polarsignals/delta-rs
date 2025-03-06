@@ -29,6 +29,7 @@ use crate::{
     DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
 
+use super::transaction::CommitProperties;
 use super::{CustomExecuteHandler, Operation};
 
 /// Error converting a Parquet table to a Delta table
@@ -91,8 +92,7 @@ impl FromStr for PartitionStrategy {
         match s.to_ascii_lowercase().as_str() {
             "hive" => Ok(PartitionStrategy::Hive),
             _ => Err(DeltaTableError::Generic(format!(
-                "Invalid partition strategy provided {}",
-                s
+                "Invalid partition strategy provided {s}"
             ))),
         }
     }
@@ -109,7 +109,8 @@ pub struct ConvertToDeltaBuilder {
     name: Option<String>,
     comment: Option<String>,
     configuration: HashMap<String, Option<String>>,
-    metadata: Option<Map<String, Value>>,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
@@ -143,7 +144,7 @@ impl ConvertToDeltaBuilder {
             name: None,
             comment: None,
             configuration: Default::default(),
-            metadata: Default::default(),
+            commit_properties: CommitProperties::default(),
             custom_execute_handler: None,
         }
     }
@@ -234,12 +235,9 @@ impl ConvertToDeltaBuilder {
         self
     }
 
-    /// Append custom (application-specific) metadata to the commit.
-    ///
-    /// This might include provenance information such as an id of the
-    /// user that made the commit or the program that created it.
-    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
-        self.metadata = Some(metadata);
+    /// Additional metadata to be added to commit info
+    pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
+        self.commit_properties = commit_properties;
         self
     }
 
@@ -426,15 +424,13 @@ impl ConvertToDeltaBuilder {
             .with_partition_columns(partition_columns.into_iter())
             .with_actions(actions)
             .with_save_mode(self.mode)
-            .with_configuration(self.configuration);
+            .with_configuration(self.configuration)
+            .with_commit_properties(self.commit_properties);
         if let Some(name) = self.name {
             builder = builder.with_table_name(name);
         }
         if let Some(comment) = self.comment {
             builder = builder.with_comment(comment);
-        }
-        if let Some(metadata) = self.metadata {
-            builder = builder.with_metadata(metadata);
         }
         Ok((builder, operation_id))
     }
@@ -524,7 +520,7 @@ mod tests {
             .to_str()
             .expect("Failed to convert Path to string slice");
         // Copy all files to a temp directory to perform testing. Skip Delta log
-        copy_files(format!("{}/{}", env!("CARGO_MANIFEST_DIR"), path), temp_dir);
+        copy_files(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")), temp_dir);
         let builder = if from_path {
             ConvertToDeltaBuilder::new().with_location(
                 ensure_table_uri(temp_dir).expect("Failed to turn temp dir into a URL"),
@@ -550,7 +546,7 @@ mod tests {
             .to_str()
             .expect("Failed to convert to string slice");
         // Copy all files to a temp directory to perform testing. Skip Delta log
-        copy_files(format!("{}/{}", env!("CARGO_MANIFEST_DIR"), path), temp_dir);
+        copy_files(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")), temp_dir);
         ConvertToDeltaBuilder::new()
             .with_log_store(log_store(temp_dir))
             .with_partition_schema(partition_schema)
