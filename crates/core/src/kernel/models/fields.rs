@@ -269,7 +269,6 @@ fn deletion_vector_field() -> StructField {
     )
 }
 
-#[cfg(test)]
 pub(crate) fn log_schema() -> &'static StructType {
     &LOG_SCHEMA
 }
