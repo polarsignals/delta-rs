@@ -9,7 +9,6 @@ use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 
 use super::{config::TableConfig, get_partition_col_data_types, DeltaTableConfig};
-#[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::{
     ActionType, Add, AddCDCFile, DataType, EagerSnapshot, LogDataHandler, LogicalFile, Metadata,
@@ -55,6 +54,41 @@ impl DeltaTableState {
     /// If the commit file is not present, None is returned.
     pub fn version_timestamp(&self, version: i64) -> Option<i64> {
         self.snapshot.version_timestamp(version)
+    }
+
+    pub fn from_actions_at_version(actions: Vec<Action>, version: i64) -> DeltaResult<Self> {
+        use crate::kernel::transaction::CommitData;
+        use crate::protocol::{DeltaOperation, SaveMode};
+
+        let metadata = actions
+            .iter()
+            .find_map(|a| match a {
+                Action::Metadata(m) => Some(m.clone()),
+                _ => None,
+            })
+            .ok_or(DeltaTableError::NotInitialized)?;
+        let protocol = actions
+            .iter()
+            .find_map(|a| match a {
+                Action::Protocol(p) => Some(p.clone()),
+                _ => None,
+            })
+            .ok_or(DeltaTableError::NotInitialized)?;
+
+        let commit_data = [CommitData::new(
+            actions,
+            DeltaOperation::Create {
+                mode: SaveMode::Append,
+                location: Path::default().to_string(),
+                protocol: protocol.clone(),
+                metadata: metadata.clone(),
+            },
+            HashMap::new(),
+            Vec::new(),
+        )];
+
+        let snapshot = EagerSnapshot::from_commits(&commit_data, version).unwrap();
+        Ok(Self { snapshot })
     }
 
     /// Construct a delta table state object from a list of actions

@@ -94,6 +94,30 @@ impl Snapshot {
         })
     }
 
+    pub fn from_commits<'a>(
+        commits: impl IntoIterator<Item = &'a CommitData>,
+        version: i64,
+    ) -> DeltaResult<(Self, RecordBatch)> {
+        use arrow_select::concat::concat_batches;
+        let (log_segment, batches) = LogSegment::from_commits(commits, version)?;
+        let batch = batches.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let batch = concat_batches(&batch[0].schema(), &batch)?;
+        let protocol = parse::read_protocol(&batch)?.unwrap();
+        let metadata = parse::read_metadata(&batch)?.unwrap();
+        let schema = serde_json::from_str(&metadata.schema_string)?;
+        Ok((
+            Self {
+                log_segment,
+                config: Default::default(),
+                protocol,
+                metadata,
+                schema,
+                table_url: Path::default().to_string(),
+            },
+            batch,
+        ))
+    }
+
     #[cfg(test)]
     pub fn new_test<'a>(
         commits: impl IntoIterator<Item = &'a CommitData>,
@@ -398,6 +422,35 @@ impl EagerSnapshot {
             }
         }
         Ok(())
+    }
+
+    pub fn from_commits<'a>(
+        commits: impl IntoIterator<Item = &'a CommitData>,
+        version: i64,
+    ) -> DeltaResult<Self> {
+        let (snapshot, batch) = Snapshot::from_commits(commits, version)?;
+        let mut files = Vec::new();
+        let mut scanner = LogReplayScanner::new();
+        files.push(scanner.process_files_batch(&batch, true)?);
+        let mapper = LogMapper::try_new(&snapshot, None)?;
+        files = files
+            .into_iter()
+            .map(|b| mapper.map_batch(b))
+            .collect::<DeltaResult<Vec<_>>>()?;
+        let mut sn = Self {
+            snapshot,
+            files,
+            tracked_actions: Default::default(),
+            transactions: None,
+        };
+
+        let visitors = HashSet::from([ActionType::Txn])
+            .iter()
+            .flat_map(get_visitor)
+            .collect::<Vec<_>>();
+        sn.process_visitors(visitors)?;
+
+        Ok(sn)
     }
 
     #[cfg(test)]

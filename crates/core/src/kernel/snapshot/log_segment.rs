@@ -239,6 +239,27 @@ impl LogSegment {
                 .and_then(|f| f.location.commit_version()))
     }
 
+    pub(super) fn from_commits<'a>(
+        commits: impl IntoIterator<Item = &'a CommitData>,
+        version: i64,
+    ) -> DeltaResult<(Self, Vec<Result<RecordBatch, DeltaTableError>>)> {
+        let mut log = Self {
+            version: -1,
+            commit_files: Default::default(),
+            checkpoint_files: Default::default(),
+        };
+        let iter = log
+            .advance(
+                commits,
+                &Path::default(),
+                crate::kernel::models::fields::log_schema(),
+                &Default::default(),
+            )?
+            .collect_vec();
+        log.version = version;
+        Ok((log, iter))
+    }
+
     #[cfg(test)]
     pub(super) fn new_test<'a>(
         commits: impl IntoIterator<Item = &'a CommitData>,
