@@ -525,7 +525,22 @@ impl LogReplayScanner {
             is_not_null(add_col)?
         };
 
-        let filtered = filter_record_batch(batch, &filter)?;
+        // Panic we're seeing in prod.
+        // https://github.com/delta-io/delta-rs/issues/3237
+        let filtered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            filter_record_batch(batch, &filter)
+        }));
+        if filtered.is_err() {
+            println!(
+                "Filter len: {} Record len: {} AddCol len: {}, RemoveCol len: {}",
+                filter.len(),
+                batch.num_rows(),
+                add_col.len(),
+                maybe_remove_col.as_ref().map(|r| r.len()).unwrap_or(0)
+            );
+            std::panic::resume_unwind(filtered.unwrap_err());
+        }
+        let filtered = filtered.unwrap()?;
         let add_col = ex::extract_and_cast::<StructArray>(&filtered, "add")?;
         let maybe_remove_col = ex::extract_and_cast_opt::<StructArray>(&filtered, "remove");
         let add_actions = read_file_info(add_col)?;
