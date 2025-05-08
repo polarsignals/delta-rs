@@ -525,28 +525,34 @@ impl LogReplayScanner {
             is_not_null(add_col)?
         };
 
-        // Panic we're seeing in prod.
-        // https://github.com/delta-io/delta-rs/issues/3237
-        let filtered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            filter_record_batch(batch, &filter)
-        }));
-        if filtered.is_err() {
-            let buf = Vec::new();
-            let mut writer = arrow_json::ArrayWriter::new(buf);
-            writer.write_batches(&[&batch]).unwrap();
-            writer.finish().unwrap();
-            let json_data = writer.into_inner();
-            println!("{:?}", json_data);
-            println!(
-                "Filter len: {} Record len: {} AddCol len: {}, RemoveCol len: {}",
-                filter.len(),
-                batch.num_rows(),
-                add_col.len(),
-                maybe_remove_col.as_ref().map(|r| r.len()).unwrap_or(0)
-            );
-            std::panic::resume_unwind(filtered.unwrap_err());
-        }
-        let filtered = filtered.unwrap()?;
+        // If the number of rows is equal to the number of true bools in the filter, no need to filter.
+        let filtered = if batch.num_rows() == filter.true_count() {
+            batch.clone()
+        } else {
+            // Panic we're seeing in prod.
+            // https://github.com/delta-io/delta-rs/issues/3237
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                filter_record_batch(batch, &filter)
+            })) {
+                Ok(filtered) => filtered?,
+                Err(e) => {
+                    let buf = Vec::new();
+                    let mut writer = arrow_json::ArrayWriter::new(buf);
+                    writer.write_batches(&[&batch]).unwrap();
+                    writer.finish().unwrap();
+                    let json_data = writer.into_inner();
+                    println!("{:?}", String::from_utf8(json_data).expect("Invalid UTF-8"));
+                    println!(
+                        "Filter len: {}({}) Record len: {}",
+                        filter.len(),
+                        filter.true_count(),
+                        batch.num_rows(),
+                    );
+                    std::panic::resume_unwind(e);
+                }
+            }
+        };
+
         let add_col = ex::extract_and_cast::<StructArray>(&filtered, "add")?;
         let maybe_remove_col = ex::extract_and_cast_opt::<StructArray>(&filtered, "remove");
         let add_actions = read_file_info(add_col)?;
