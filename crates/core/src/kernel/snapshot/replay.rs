@@ -531,6 +531,12 @@ impl LogReplayScanner {
             filter_record_batch(batch, &filter)
         }));
         if filtered.is_err() {
+            let buf = Vec::new();
+            let mut writer = arrow_json::ArrayWriter::new(buf);
+            writer.write_batches(&[&batch]).unwrap();
+            writer.finish().unwrap();
+            let json_data = writer.into_inner();
+            println!("{:?}", json_data);
             println!(
                 "Filter len: {} Record len: {} AddCol len: {}, RemoveCol len: {}",
                 filter.len(),
