@@ -525,31 +525,15 @@ impl LogReplayScanner {
             is_not_null(add_col)?
         };
 
-        // If the number of rows is equal to the number of true bools in the filter, no need to filter.
-        let filtered = if batch.num_rows() == filter.true_count() {
-            batch.clone()
-        } else {
-            // Panic we're seeing in prod.
-            // https://github.com/delta-io/delta-rs/issues/3237
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                filter_record_batch(batch, &filter)
-            })) {
-                Ok(filtered) => filtered?,
-                Err(e) => {
-                    let buf = Vec::new();
-                    let mut writer = arrow_json::ArrayWriter::new(buf);
-                    writer.write_batches(&[&batch]).unwrap();
-                    writer.finish().unwrap();
-                    let json_data = writer.into_inner();
-                    println!("{:?}", String::from_utf8(json_data).expect("Invalid UTF-8"));
-                    println!(
-                        "Filter len: {}({}) Record len: {}",
-                        filter.len(),
-                        filter.true_count(),
-                        batch.num_rows(),
-                    );
-                    std::panic::resume_unwind(e);
-                }
+        // Panic we're seeing in prod.
+        // https://github.com/delta-io/delta-rs/issues/3237
+        let filtered = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            filter_record_batch(batch, &filter)
+        })) {
+            Ok(filtered) => filtered?,
+            Err(e) => {
+                println!("Retrying panic in filter_record_batch: {e:?}");
+                filter_record_batch(batch, &filter)?
             }
         };
 
