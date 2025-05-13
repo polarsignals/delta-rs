@@ -510,6 +510,16 @@ impl LogReplayScanner {
         }
     }
 
+    fn find_column_with_different_length(batch: &RecordBatch, filter: &BooleanArray) {
+        println!("DEBUG: Batch len: {}:{filter:?}", batch.num_rows());
+        for i in 0..batch.num_columns() {
+            let schema = batch.schema();
+            let name = schema.flattened_fields()[i].name();
+            let column = batch.column(i);
+            println!("Column: {name}: {}", column.len());
+        }
+    }
+
     /// Takes a record batch of add and protentially remove actions and returns a
     /// filtered batch of actions that contains only active rows.
     pub(super) fn process_files_batch(
@@ -532,8 +542,11 @@ impl LogReplayScanner {
         })) {
             Ok(filtered) => filtered?,
             Err(e) => {
-                println!("Retrying panic in filter_record_batch: {e:?}");
-                filter_record_batch(batch, &filter)?
+                // TODO: somehow some array in the batch doesn't have the same length.
+                // This seems to only happen when:
+                //  IterationStrategy::All => Ok(values.slice(0, predicate.count)),
+                Self::find_column_with_different_length(batch, &filter);
+                std::panic::resume_unwind(e);
             }
         };
 
