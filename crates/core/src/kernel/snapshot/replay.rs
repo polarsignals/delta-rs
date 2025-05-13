@@ -517,11 +517,12 @@ impl LogReplayScanner {
             let name = schema.flattened_fields()[i].name();
             let column = batch.column(i);
             println!("Column: {name}: {}", column.len());
-            let mut j = i;
             column.as_any().downcast_ref::<StructArray>().map(|arr| {
-                j += 1;
-                let name = schema.flattened_fields()[j].name();
-                println!("    Column: {name}: {}", arr.len());
+                for j in 0..arr.num_columns() {
+                    let col = arr.column(j);
+                    let name = arr.column_names()[j];
+                    println!("    Column: {name}: {}", col.len());
+                }
             });
         }
     }
