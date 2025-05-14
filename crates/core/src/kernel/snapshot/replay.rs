@@ -510,42 +510,29 @@ impl LogReplayScanner {
         }
     }
 
+    fn slice_columns(array: &dyn Array, count: usize) {
+        match array.data_type() {
+            arrow_schema::DataType::Struct(_) => {
+                let s = cast::as_struct_array(array);
+                s.columns().iter().enumerate().for_each(|(i, a)| {
+                    Self::slice_columns(a, count);
+                    let name = s.column_names()[i];
+                    println!("Slicing {name}[0:{count}]; len({})", a.len());
+                });
+            }
+            _ => {}
+        }
+    }
+
     fn find_column_with_different_length(batch: &RecordBatch, filter: &BooleanArray) {
         println!("DEBUG: Batch len: {}:{filter:?}", batch.num_rows());
-        for i in 0..batch.num_columns() {
-            let schema = batch.schema();
-            let name = schema.flattened_fields()[i].name();
-            let column = batch.column(i);
-            println!("Column: {name}: {}", column.len());
-            column.as_any().downcast_ref::<StructArray>().map(|arr| {
-                for j in 0..arr.num_columns() {
-                    let col = arr.column(j);
-                    let name = arr.column_names()[j];
-                    println!("    Column: {name}: {}", col.len());
-                }
-            });
-        }
-
         let count = filter.values().count_set_bits();
-        let _ = batch
-            .columns()
-            .iter()
-            .map(|a| {
-                a.as_any().downcast_ref::<StructArray>().map(|arr| {
-                    let filtered_arrays = arr
-                        .columns()
-                        .iter()
-                        .enumerate()
-                        .map(|(j, a)| {
-                            let name = arr.column_names()[j];
-                            println!("Slicing {name}[0:{count}]; len({})", a.len());
-                            a.slice(0, count)
-                        })
-                        .collect::<Vec<_>>();
-                    println!("Filtered arrays: {filtered_arrays:?}");
-                })
-            })
-            .collect::<Vec<_>>();
+        batch.columns().iter().enumerate().for_each(|(i, a)| {
+            let schema = batch.schema();
+            let name = schema.fields()[i].name();
+            println!("Slicing {name}[0:{count}]; len({})", a.len());
+            Self::slice_columns(a, count);
+        });
     }
 
     /// Takes a record batch of add and protentially remove actions and returns a
