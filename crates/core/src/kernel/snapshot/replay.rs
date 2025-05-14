@@ -525,6 +525,22 @@ impl LogReplayScanner {
                 }
             });
         }
+
+        let count = filter.values().count_set_bits();
+        let schema = batch.schema();
+        let mut i = 0;
+        let filtered_arrays = batch
+            .columns()
+            .iter()
+            .map(|a| {
+                let name = schema.flattened_fields()[i].name();
+                println!("Slicing {name}[0:{count}]; len({})", a.len());
+                i += 1;
+                a.slice(0, count)
+            })
+            .collect::<Vec<_>>();
+
+        println!("Filtered arrays: {filtered_arrays:?}");
     }
 
     /// Takes a record batch of add and protentially remove actions and returns a
