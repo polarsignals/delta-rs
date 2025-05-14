@@ -527,20 +527,25 @@ impl LogReplayScanner {
         }
 
         let count = filter.values().count_set_bits();
-        let schema = batch.schema();
-        let mut i = 0;
-        let filtered_arrays = batch
+        let _ = batch
             .columns()
             .iter()
             .map(|a| {
-                let name = schema.flattened_fields()[i].name();
-                println!("Slicing {name}[0:{count}]; len({})", a.len());
-                i += 1;
-                a.slice(0, count)
+                a.as_any().downcast_ref::<StructArray>().map(|arr| {
+                    let filtered_arrays = arr
+                        .columns()
+                        .iter()
+                        .enumerate()
+                        .map(|(j, a)| {
+                            let name = arr.column_names()[j];
+                            println!("Slicing {name}[0:{count}]; len({})", a.len());
+                            a.slice(0, count)
+                        })
+                        .collect::<Vec<_>>();
+                    println!("Filtered arrays: {filtered_arrays:?}");
+                })
             })
             .collect::<Vec<_>>();
-
-        println!("Filtered arrays: {filtered_arrays:?}");
     }
 
     /// Takes a record batch of add and protentially remove actions and returns a
