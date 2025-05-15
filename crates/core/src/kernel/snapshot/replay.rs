@@ -123,6 +123,45 @@ fn map_batch(
     Ok(new_batch)
 }
 
+fn ensure_column_lengths(name: &str, array: &dyn Array, len: usize) -> Result<(), DeltaTableError> {
+    match array.data_type() {
+        arrow_schema::DataType::Struct(_) => {
+            let s = cast::as_struct_array(array);
+            s.columns()
+                .iter()
+                .enumerate()
+                .map(|(i, a)| {
+                    let name = format!("{name}.{}", s.column_names()[i]);
+                    if a.len() != len {
+                        let violations = vec![format!(
+                            "Column {name} has length {}, expected {}",
+                            a.len(),
+                            len
+                        )];
+                        Err(DeltaTableError::InvalidData { violations })
+                    } else {
+                        ensure_column_lengths(name.as_str(), a, len)
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(())
+        }
+        _ => {
+            let name = format!("{name}");
+            if array.len() != len {
+                let violations = vec![format!(
+                    "Column {name} has length {}, expected {}",
+                    array.len(),
+                    len
+                )];
+                Err(DeltaTableError::InvalidData { violations })
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 /// parse the serialized stats in the  `add.stats` column in the files batch
 /// and add a new column `stats_parsed` containing the the parsed stats.
 fn parse_stats(
@@ -134,6 +173,16 @@ fn parse_stats(
         DeltaTableError::generic("No stats column found in files batch. This is unexpected."),
     )?;
     let stats: StructArray = json::parse_json(stats, stats_schema.clone(), config)?.into();
+    // We're seeing stats_parsed have columns with a different length than the batch.
+    // This seems to be where it's coming from.
+    match ensure_column_lengths("add.stats_parsed", &stats, stats.len()) {
+        Ok(_) => {}
+        Err(e) => {
+            println!("Stats: {stats:?}");
+            println!("Stats schema: {stats_schema:?}");
+            panic!("Bad parsed_stats {e}")
+        }
+    }
     insert_field(batch, stats, "stats_parsed")
 }
 
@@ -515,9 +564,9 @@ impl LogReplayScanner {
             arrow_schema::DataType::Struct(_) => {
                 let s = cast::as_struct_array(array);
                 s.columns().iter().enumerate().for_each(|(i, a)| {
-                    Self::slice_columns(a, count);
                     let name = s.column_names()[i];
                     println!("Slicing {name}[0:{count}]; len({})", a.len());
+                    Self::slice_columns(a, count);
                 });
             }
             _ => {}
@@ -684,10 +733,11 @@ pub(super) mod tests {
     use super::super::{log_segment::LogSegment, partitions_schema, stats_schema};
     use super::*;
     use crate::kernel::transaction::CommitData;
-    use crate::kernel::{models::ActionType, StructType};
+    use crate::kernel::{models::ActionType, PrimitiveType, StructField, StructType};
     use crate::protocol::DeltaOperation;
     use crate::table::config::TableConfig;
     use crate::test_utils::{ActionFactory, TestResult, TestSchemas};
+    use std::sync::LazyLock;
 
     pub(crate) async fn test_log_replay(context: &IntegrationContext) -> TestResult {
         let log_schema = Arc::new(StructType::new(vec![
@@ -850,6 +900,66 @@ pub(super) mod tests {
             }
             _ => panic!("unexpected data type"),
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_stats_schema_subset() -> TestResult {
+        fn simple() -> &'static StructType {
+            static SIMPLE: LazyLock<StructType> = LazyLock::new(|| {
+                StructType::new(vec![
+                    StructField::new(
+                        "id".to_string(),
+                        DataType::Primitive(PrimitiveType::String),
+                        true,
+                    ),
+                    StructField::new(
+                        "value".to_string(),
+                        DataType::Primitive(PrimitiveType::Integer),
+                        true,
+                    ),
+                ])
+            });
+
+            &SIMPLE
+        }
+        let schema = TestSchemas::simple();
+        let table_schema = simple();
+        let config_map = HashMap::new();
+        let table_config = TableConfig(&config_map);
+        let config = DeltaTableConfig::default();
+
+        let commit_data = CommitData {
+            actions: vec![ActionFactory::add(schema, HashMap::new(), Vec::new(), true).into()],
+            operation: DeltaOperation::Write {
+                mode: crate::protocol::SaveMode::Append,
+                partition_by: None,
+                predicate: None,
+            },
+            app_metadata: Default::default(),
+            app_transactions: Default::default(),
+        };
+        let (_, maybe_batches) = LogSegment::new_test(&[commit_data])?;
+
+        // Create a batch that as a stats column that is missing some fields.
+        // We expect the parse_stats function to fill out the missing fields with null columns.
+        let batches = maybe_batches.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let batch = concat_batches(&batches[0].schema(), &batches)?;
+
+        assert!(ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats").is_some());
+        assert!(ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed").is_none());
+
+        let stats_schema = stats_schema(table_schema, table_config)?;
+        println!("Stats Schema: {stats_schema:?}");
+        let new_batch = parse_stats(batch, Arc::new((&stats_schema).try_into()?), &config)?;
+        // This shouldn't panic
+        new_batch.slice(0, 1);
+        assert!(ex::extract_and_cast_opt::<StructArray>(&new_batch, "add.stats_parsed").is_some());
+
+        let parsed =
+            ex::extract_and_cast_opt::<StructArray>(&new_batch, "add.stats_parsed").unwrap();
+        println!("{parsed:?}");
 
         Ok(())
     }
