@@ -109,7 +109,21 @@ fn map_batch(
     let stats = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats");
     let stats_parsed_col = ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed");
     if stats_parsed_col.is_none() && stats.is_some() {
-        new_batch = parse_stats(new_batch, stats_schema, config)?;
+        new_batch = parse_stats(new_batch, stats_schema.clone(), config)?;
+        // We're seeing stats_parsed have columns with a different length than the batch.
+        // This seems to be where it's coming from.
+        new_batch.columns().iter().enumerate().for_each(|(i, a)| {
+            let schema = batch.schema();
+            let name = schema.fields()[i].name();
+            match ensure_column_lengths(name, &a, new_batch.num_rows()) {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("Stats: {stats:?}");
+                    println!("Stats schema: {:?}", stats_schema);
+                    panic!("Bad parsed_stats {e}")
+                }
+            }
+        });
     }
 
     if let Some(partitions_schema) = partition_schema {
@@ -173,16 +187,6 @@ fn parse_stats(
         DeltaTableError::generic("No stats column found in files batch. This is unexpected."),
     )?;
     let stats: StructArray = json::parse_json(stats, stats_schema.clone(), config)?.into();
-    // We're seeing stats_parsed have columns with a different length than the batch.
-    // This seems to be where it's coming from.
-    match ensure_column_lengths("add.stats_parsed", &stats, stats.len()) {
-        Ok(_) => {}
-        Err(e) => {
-            println!("Stats: {stats:?}");
-            println!("Stats schema: {stats_schema:?}");
-            panic!("Bad parsed_stats {e}")
-        }
-    }
     insert_field(batch, stats, "stats_parsed")
 }
 
@@ -908,6 +912,10 @@ pub(super) mod tests {
     fn test_parse_stats_schema_subset() -> TestResult {
         fn simple() -> &'static StructType {
             static SIMPLE: LazyLock<StructType> = LazyLock::new(|| {
+                let nested = StructType::new(vec![
+                    StructField::new("a", DataType::Primitive(PrimitiveType::String), false),
+                    StructField::new("b", DataType::Primitive(PrimitiveType::String), false),
+                ]);
                 StructType::new(vec![
                     StructField::new(
                         "id".to_string(),
@@ -919,13 +927,23 @@ pub(super) mod tests {
                         DataType::Primitive(PrimitiveType::Integer),
                         true,
                     ),
+                    StructField::new(
+                        "modified".to_string(),
+                        DataType::Primitive(PrimitiveType::String),
+                        true,
+                    ),
+                    StructField::new(
+                        "attributes".to_string(),
+                        DataType::Struct(Box::new(nested)),
+                        true,
+                    ),
                 ])
             });
 
             &SIMPLE
         }
-        let schema = TestSchemas::simple();
-        let table_schema = simple();
+        let table_schema = TestSchemas::simple();
+        let schema = simple();
         let config_map = HashMap::new();
         let table_config = TableConfig(&config_map);
         let config = DeltaTableConfig::default();
@@ -953,6 +971,7 @@ pub(super) mod tests {
         let stats_schema = stats_schema(table_schema, table_config)?;
         println!("Stats Schema: {stats_schema:?}");
         let new_batch = parse_stats(batch, Arc::new((&stats_schema).try_into()?), &config)?;
+        let new_batch = parse_stats(new_batch, Arc::new((&stats_schema).try_into()?), &config)?;
         // This shouldn't panic
         new_batch.slice(0, 1);
         assert!(ex::extract_and_cast_opt::<StructArray>(&new_batch, "add.stats_parsed").is_some());

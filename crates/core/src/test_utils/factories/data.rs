@@ -158,6 +158,25 @@ pub fn generate_random_array(
             );
             Ok(Arc::new(arr))
         }
+        Struct(struct_type) => {
+            let res = struct_type
+                .fields()
+                .map(|field| {
+                    (
+                        field.name.as_str(),
+                        generate_random_array(
+                            field.data_type().clone(),
+                            length,
+                            min_val.clone(),
+                            max_val.clone(),
+                        )
+                        .unwrap(),
+                    )
+                })
+                .collect::<Vec<(&str, ArrayRef)>>();
+            let arr = StructArray::try_from(res)?;
+            Ok(Arc::new(arr))
+        }
         _ => todo!(),
     }
 }
