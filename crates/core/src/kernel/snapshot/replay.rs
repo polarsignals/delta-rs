@@ -138,6 +138,15 @@ fn map_batch(
 }
 
 fn ensure_column_lengths(name: &str, array: &dyn Array, len: usize) -> Result<(), DeltaTableError> {
+    if array.len() != len {
+        let violations = vec![format!(
+            "Column {name} has length {}, expected {}",
+            array.len(),
+            len
+        )];
+        return Err(DeltaTableError::InvalidData { violations });
+    }
+
     match array.data_type() {
         arrow_schema::DataType::Struct(_) => {
             let s = cast::as_struct_array(array);
@@ -160,19 +169,7 @@ fn ensure_column_lengths(name: &str, array: &dyn Array, len: usize) -> Result<()
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(())
         }
-        _ => {
-            let name = format!("{name}");
-            if array.len() != len {
-                let violations = vec![format!(
-                    "Column {name} has length {}, expected {}",
-                    array.len(),
-                    len
-                )];
-                Err(DeltaTableError::InvalidData { violations })
-            } else {
-                Ok(())
-            }
-        }
+        _ => Ok(()),
     }
 }
 
