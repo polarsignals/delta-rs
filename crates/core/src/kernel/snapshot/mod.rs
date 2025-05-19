@@ -395,6 +395,11 @@ impl EagerSnapshot {
             false => vec![],
         };
 
+        // DEBUG: attempt to slice all files.
+        files.iter().for_each(|r| {
+            r.slice(0, r.num_rows());
+        });
+
         let mut sn = Self {
             snapshot,
             files,
@@ -437,6 +442,12 @@ impl EagerSnapshot {
             .into_iter()
             .map(|b| mapper.map_batch(b))
             .collect::<DeltaResult<Vec<_>>>()?;
+
+        // DEBUG: attempt to slice all files.
+        files.iter().for_each(|r| {
+            r.slice(0, r.num_rows());
+        });
+
         let mut sn = Self {
             snapshot,
             files,
@@ -528,11 +539,16 @@ impl EagerSnapshot {
 
         let mapper = LogMapper::try_new(&self.snapshot, None)?;
 
-        let files =
+        let files: Vec<_> =
             ReplayStream::try_new(log_stream, checkpoint_stream, &self.snapshot, &mut visitors)?
                 .map(|batch| batch.and_then(|b| mapper.map_batch(b)))
                 .try_collect()
                 .await?;
+
+        // DEBUG: attempt to slice all files.
+        files.iter().for_each(|r| {
+            r.slice(0, r.num_rows());
+        });
 
         self.files = files;
         self.process_visitors(visitors)?;
@@ -691,6 +707,11 @@ impl EagerSnapshot {
             )
             .map(|b| mapper.map_batch(b))
             .collect::<DeltaResult<Vec<_>>>()?;
+
+        // DEBUG: attempt to slice all files.
+        self.files.iter().for_each(|r| {
+            r.slice(0, r.num_rows());
+        });
 
         if let Some(metadata) = metadata {
             self.snapshot.metadata = metadata;
