@@ -104,6 +104,8 @@ fn map_batch(
     partition_schema: Option<Arc<StructType>>,
     config: &DeltaTableConfig,
 ) -> DeltaResult<RecordBatch> {
+    // DEBUG: attempt to slice the new_batch
+    batch.slice(0, batch.num_rows());
     let mut new_batch = batch.clone();
 
     let stats = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats");
@@ -137,6 +139,8 @@ fn map_batch(
         }
     }
 
+    // DEBUG: attempt to slice the new_batch
+    new_batch.slice(0, new_batch.num_rows());
     Ok(new_batch)
 }
 
