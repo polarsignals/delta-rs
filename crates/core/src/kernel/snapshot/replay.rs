@@ -106,7 +106,6 @@ fn map_batch(
 ) -> DeltaResult<RecordBatch> {
     let mut new_batch = batch.clone();
 
-    /* Disble this for now, as it's the current culprit for the panics.
     let stats = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats");
     let stats_parsed_col = ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed");
     if stats_parsed_col.is_none() && stats.is_some() {
@@ -117,7 +116,10 @@ fn map_batch(
             let schema = batch.schema();
             let name = schema.fields()[i].name();
             match ensure_column_lengths(name, a, new_batch.num_rows()) {
-                Ok(_) => {}
+                Ok(_) => {
+                    // If it passes we should be able to slice this record.
+                    new_batch.slice(0, new_batch.num_rows());
+                }
                 Err(e) => {
                     println!("Stats: {stats:?}");
                     println!("Stats schema: {:?}", stats_schema);
@@ -126,7 +128,6 @@ fn map_batch(
             }
         });
     }
-    */
 
     if let Some(partitions_schema) = partition_schema {
         let partitions_parsed_col =
