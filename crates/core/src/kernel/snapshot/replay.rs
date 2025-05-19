@@ -106,6 +106,7 @@ fn map_batch(
 ) -> DeltaResult<RecordBatch> {
     let mut new_batch = batch.clone();
 
+    /* Disble this for now, as it's the current culprit for the panics.
     let stats = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats");
     let stats_parsed_col = ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed");
     if stats_parsed_col.is_none() && stats.is_some() {
@@ -115,7 +116,7 @@ fn map_batch(
         new_batch.columns().iter().enumerate().for_each(|(i, a)| {
             let schema = batch.schema();
             let name = schema.fields()[i].name();
-            match ensure_column_lengths(name, &a, new_batch.num_rows()) {
+            match ensure_column_lengths(name, a, new_batch.num_rows()) {
                 Ok(_) => {}
                 Err(e) => {
                     println!("Stats: {stats:?}");
@@ -125,6 +126,7 @@ fn map_batch(
             }
         });
     }
+    */
 
     if let Some(partitions_schema) = partition_schema {
         let partitions_parsed_col =
@@ -155,16 +157,7 @@ fn ensure_column_lengths(name: &str, array: &dyn Array, len: usize) -> Result<()
                 .enumerate()
                 .map(|(i, a)| {
                     let name = format!("{name}.{}", s.column_names()[i]);
-                    if a.len() != len {
-                        let violations = vec![format!(
-                            "Column {name} has length {}, expected {}",
-                            a.len(),
-                            len
-                        )];
-                        Err(DeltaTableError::InvalidData { violations })
-                    } else {
-                        ensure_column_lengths(name.as_str(), a, len)
-                    }
+                    ensure_column_lengths(name.as_str(), a, len)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(())
