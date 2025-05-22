@@ -101,6 +101,7 @@ pub mod logical;
 pub mod physical;
 pub mod planner;
 
+use crate::kernel::transaction::state::AddContainer;
 pub use cdf::scan::DeltaCdfTableProvider;
 
 mod schema_adapter;
@@ -562,41 +563,55 @@ impl<'a> DeltaScanBuilder<'a> {
                 .unwrap()
         });
 
-        // Perform Pruning of files to scan
-        let (files, files_scanned, files_pruned) = match self.files {
-            Some(files) => {
-                let files = files.to_owned();
-                let files_scanned = files.len();
-                (files, files_scanned, 0)
-            }
-            None => {
-                if let Some(predicate) = &logical_filter {
-                    let pruning_predicate =
-                        PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
-                    let files_to_prune = pruning_predicate.prune(self.snapshot)?;
-                    let mut files_pruned = 0usize;
-                    let files = self
+        let (files, files_scanned, files_pruned) = if let Some(predicate) = &logical_filter {
+            let pruning_predicate =
+                PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
+
+            match self.files {
+                Some(files) => {
+                    let files_vec = files.to_vec();
+                    let container = AddContainer::new(
+                        &files_vec,
+                        &self.snapshot.metadata().partition_columns,
+                        logical_schema.clone(),
+                    );
+
+                    let keep_mask = pruning_predicate.prune(&container)?;
+                    let total_files = files.len();
+
+                    let pruned_files: Vec<_> = files
+                        .iter()
+                        .zip(keep_mask)
+                        .filter(|&(_, keep)| keep)
+                        .map(|(action, _)| action.to_owned())
+                        .collect();
+
+                    let files_kept = pruned_files.len();
+                    (pruned_files, files_kept, total_files - files_kept)
+                }
+                None => {
+                    let keep_mask = pruning_predicate.prune(self.snapshot)?;
+                    let total_files = keep_mask.len();
+
+                    let pruned_files: Vec<_> = self
                         .snapshot
                         .file_actions_iter()?
-                        .zip(files_to_prune.into_iter())
-                        .filter_map(|(action, keep)| {
-                            if keep {
-                                Some(action.to_owned())
-                            } else {
-                                files_pruned += 1;
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>();
+                        .zip(keep_mask)
+                        .filter(|&(_, keep)| keep)
+                        .map(|(action, _)| action.to_owned())
+                        .collect();
 
-                    let files_scanned = files.len();
-                    (files, files_scanned, files_pruned)
-                } else {
-                    let files = self.snapshot.file_actions()?;
-                    let files_scanned = files.len();
-                    (files, files_scanned, 0)
+                    let files_kept = pruned_files.len();
+                    (pruned_files, files_kept, total_files - files_kept)
                 }
             }
+        } else {
+            let files = match self.files {
+                Some(f) => f.to_vec(),
+                None => self.snapshot.file_actions()?,
+            };
+            let files_scanned = files.len();
+            (files, files_scanned, 0)
         };
 
         // TODO we group files together by their partition values. If the table is partitioned
@@ -2282,15 +2297,15 @@ mod tests {
 
         let df = ctx.sql("select * from test").await.unwrap();
         let actual = df.collect().await.unwrap();
-        let expected = vec! [
-                "+----+----+----+-------------------------------------------------------------------------------+",
-                "| c3 | c1 | c2 | file_source                                                                   |",
-                "+----+----+----+-------------------------------------------------------------------------------+",
-                "| 4  | 6  | a  | c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet |",
-                "| 5  | 4  | c  | c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet |",
-                "| 6  | 5  | b  | c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet |",
-                "+----+----+----+-------------------------------------------------------------------------------+",
-            ];
+        let expected = vec![
+            "+----+----+----+-------------------------------------------------------------------------------+",
+            "| c3 | c1 | c2 | file_source                                                                   |",
+            "+----+----+----+-------------------------------------------------------------------------------+",
+            "| 4  | 6  | a  | c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet |",
+            "| 5  | 4  | c  | c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet |",
+            "| 6  | 5  | b  | c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet |",
+            "+----+----+----+-------------------------------------------------------------------------------+",
+        ];
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
