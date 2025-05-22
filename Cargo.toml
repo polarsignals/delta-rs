@@ -75,3 +75,18 @@ async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
 num_cpus = { version = "1" }
+
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
+arrow-arith = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
+arrow-array = { git = "https://github.com/apache/arrow-rs", rev = "e9df239", features = ["chrono-tz"] }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
+arrow-json = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
+arrow-row = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
+arrow-select = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
+parquet = { git = "https://github.com/apache/arrow-rs", rev = "e9df239" }
