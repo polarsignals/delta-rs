@@ -24,7 +24,7 @@ use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
 use deltalake_core::delta_datafusion::DeltaScan;
-use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
+use deltalake_core::kernel::{Add, DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
@@ -429,8 +429,6 @@ mod local {
             let _result = collect(plan.execute(0, task_ctx)?).await?;
             visit_execution_plan(&plan, &mut metrics).unwrap();
         } else {
-            // if scan produces no output from ParquetExec, we still want to visit DeltaScan
-            // to check its metrics
             visit_execution_plan(scan.as_ref(), &mut metrics).unwrap();
         }
 
@@ -855,6 +853,108 @@ mod local {
         // let e = col("k").is_not_null();
         // let metrics = get_scan_metrics(&table, &state, &[e]).await?;
         // assert_eq!(metrics.num_scanned_files(), 2);
+
+        Ok(())
+    }
+
+    async fn get_scan_metrics_with_files(
+        table: &DeltaTable,
+        state: &SessionState,
+        files: Option<Vec<Add>>,
+        e: &[Expr],
+    ) -> Result<ExecutionMetricsCollector> {
+        use deltalake_core::delta_datafusion::{DeltaScanConfig, DeltaTableProvider};
+
+        let mut provider = DeltaTableProvider::try_new(
+            table.snapshot().unwrap().clone(),
+            table.log_store(),
+            DeltaScanConfig::default(),
+        )?;
+
+        if let Some(f) = files {
+            provider = provider.with_files(f);
+        }
+
+        let mut metrics = ExecutionMetricsCollector::default();
+        let scan = provider.scan(state, None, e, None).await?;
+
+        if scan.properties().output_partitioning().partition_count() > 0 {
+            let plan = CoalescePartitionsExec::new(scan);
+            let task_ctx = Arc::new(TaskContext::from(state));
+            let _result = collect(plan.execute(0, task_ctx)?).await?;
+            visit_execution_plan(&plan, &mut metrics).unwrap();
+        } else {
+            visit_execution_plan(scan.as_ref(), &mut metrics).unwrap();
+        }
+
+        Ok(metrics)
+    }
+
+    #[tokio::test]
+    async fn test_files_scanned_with_files() -> Result<()> {
+        use datafusion::prelude::*;
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+
+        let batch1 = create_all_types_batch(3, 0, 0); // values 0-2
+        let batch2 = create_all_types_batch(3, 0, 4); // values 4-6
+        let batch3 = create_all_types_batch(3, 0, 7); // values 7-9
+
+        let (_tmp, mut table) = prepare_table(vec![batch1], SaveMode::Overwrite, vec![]).await;
+        let files_before_1 = table.snapshot().unwrap().file_actions().unwrap();
+
+        table = DeltaOps(table)
+            .write(vec![batch2])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        let files_before_2 = table.snapshot().unwrap().file_actions().unwrap();
+
+        table = DeltaOps(table)
+            .write(vec![batch3])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        let all_files = table.snapshot().unwrap().file_actions().unwrap();
+
+        assert_eq!(all_files.len(), 3);
+
+        let file_0_2 = files_before_1[0].clone();
+        let file_4_6 = files_before_2
+            .iter()
+            .find(|f| !files_before_1.iter().any(|f1| f1.path == f.path))
+            .unwrap()
+            .clone();
+        let file_7_9 = all_files
+            .iter()
+            .find(|f| !files_before_2.iter().any(|f2| f2.path == f.path))
+            .unwrap()
+            .clone();
+
+        // Test without with_files (normal snapshot pruning)
+        let e = col("int64").eq(lit(5i64));
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 1);
+        assert_eq!(metrics.skip_count, 2);
+
+        // Test with with_files providing all files (should behave the same)
+        let e = col("int64").eq(lit(5i64));
+        let metrics =
+            get_scan_metrics_with_files(&table, &state, Some(all_files.clone()), &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 1);
+        assert_eq!(metrics.skip_count, 2);
+
+        let subset_files = vec![file_0_2.clone(), file_7_9.clone()];
+        let e = col("int64").gt(lit(6i64));
+        let metrics = get_scan_metrics_with_files(&table, &state, Some(subset_files), &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 1);
+        assert_eq!(metrics.skip_count, 1);
+
+        let subset_files = vec![file_0_2.clone(), file_4_6.clone()];
+        let e = col("int64").gt(lit(6i64));
+        let metrics = get_scan_metrics_with_files(&table, &state, Some(subset_files), &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 0);
+        assert_eq!(metrics.skip_count, 2);
 
         Ok(())
     }
