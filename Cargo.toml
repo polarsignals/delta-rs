@@ -26,7 +26,7 @@ debug = true
 debug = "line-tables-only"
 
 [workspace.dependencies]
-delta_kernel = { git = "https://github.com/polarsignals/delta-kernel-rs", rev = "e62ae61", features = ["arrow", "internal-api", "default-engine-rustls"] }
+delta_kernel = { git = "https://github.com/polarsignals/delta-kernel-rs", rev = "4ebb24c", features = ["arrow", "internal-api", "default-engine-rustls"] }
 
 # arrow
 arrow = { git = "https://github.com/polarsignals/arrow-rs", rev = "4c1da06" }
