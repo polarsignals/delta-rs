@@ -659,7 +659,14 @@ mod datafusion {
                             .map(|sv| sv.to_array())
                             .collect::<Result<Vec<_>, datafusion_common::DataFusionError>>()
                             .unwrap();
-                        let sa = StructArray::new(fields.clone(), arrays, None);
+                        let sa = {
+                            if arrays.is_empty() {
+                                StructArray::try_new_with_length(fields.clone(), arrays, None, 0)
+                                    .unwrap()
+                            } else {
+                                StructArray::new(fields.clone(), arrays, None)
+                            }
+                        };
                         Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
                     })
                     .unwrap_or(Precision::Absent),
