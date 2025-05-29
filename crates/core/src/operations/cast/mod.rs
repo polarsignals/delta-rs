@@ -19,28 +19,31 @@ fn cast_struct(
     cast_options: &CastOptions,
     add_missing: bool,
 ) -> Result<StructArray, ArrowError> {
-    StructArray::try_new(
-        fields.to_owned(),
-        fields
-            .iter()
-            .map(|field| {
-                let col_or_not = struct_array.column_by_name(field.name());
-                match col_or_not {
-                    None => {
-                        if add_missing && field.is_nullable() {
-                            Ok(new_null_array(field.data_type(), struct_array.len()))
-                        } else {
-                            Err(ArrowError::SchemaError(format!(
-                                "Could not find column {}",
-                                field.name()
-                            )))
-                        }
+    let arrays = fields
+        .iter()
+        .map(|field| {
+            let col_or_not = struct_array.column_by_name(field.name());
+            match col_or_not {
+                None => {
+                    if add_missing && field.is_nullable() {
+                        Ok(new_null_array(field.data_type(), struct_array.len()))
+                    } else {
+                        Err(ArrowError::SchemaError(format!(
+                            "Could not find column {}",
+                            field.name()
+                        )))
                     }
-                    Some(col) => cast_field(col, field, cast_options, add_missing),
                 }
-            })
-            .collect::<Result<Vec<_>, _>>()?,
+                Some(col) => cast_field(col, field, cast_options, add_missing),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let len = arrays.first().map_or(0, |x| x.len());
+    StructArray::try_new_with_length(
+        fields.to_owned(),
+        arrays,
         struct_array.nulls().map(ToOwned::to_owned),
+        len,
     )
 }
 
@@ -178,11 +181,13 @@ pub fn cast_record_batch(
         ..Default::default()
     };
 
-    let s = StructArray::new(
+    let len = batch.columns().first().map_or(0, |col| col.len());
+    let s = StructArray::try_new_with_length(
         batch.schema().as_ref().to_owned().fields,
         batch.columns().to_owned(),
         None,
-    );
+        len,
+    )?;
     let struct_array = cast_struct(&s, target_schema.fields(), &cast_options, add_missing)?;
 
     Ok(RecordBatch::try_new_with_options(
