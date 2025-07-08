@@ -27,7 +27,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef as ArrowSchemaRef;
-use delta_kernel::expressions::Scalar;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
@@ -47,7 +46,7 @@ use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::DeltaTableProvider;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
-use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
+use crate::kernel::{Action, Add, PartitionsExt, Remove};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -249,9 +248,10 @@ impl<'a> OptimizeBuilder<'a> {
     }
 
     /// Only optimize files that return true for the specified partition filter
-    pub fn with_filters(mut self, filters: &'a [PartitionFilter]) -> Self {
-        self.filters = filters;
-        self
+    pub fn with_filters(self, _filters: &'a [PartitionFilter]) -> Self {
+        unimplemented!(
+            "Polar Signals custom bin packing code by partition does not support filters"
+        );
     }
 
     /// Set the target file size
@@ -372,7 +372,7 @@ impl From<OptimizeInput> for DeltaOperation {
 /// Generate an appropriate remove action for the optimization task
 fn create_remove(
     path: &str,
-    partitions: &IndexMap<String, Scalar>,
+    partitions: &IndexMap<String, Option<String>>,
     size: i64,
 ) -> Result<Action, DeltaTableError> {
     // NOTE unwrap is safe since UNIX_EPOCH will always be earlier then now.
@@ -384,21 +384,7 @@ fn create_remove(
         deletion_timestamp: Some(deletion_time),
         data_change: false,
         extended_file_metadata: None,
-        partition_values: Some(
-            partitions
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        if v.is_null() {
-                            None
-                        } else {
-                            Some(v.serialize())
-                        },
-                    )
-                })
-                .collect(),
-        ),
+        partition_values: Some(partitions.clone().into_iter().collect()),
         size: Some(size),
         deletion_vector: None,
         tags: None,
@@ -417,11 +403,11 @@ enum OptimizeOperations {
     ///
     /// Bins are determined by the bin-packing algorithm to reach an optimal size.
     /// Files that are large enough already are skipped. Bins of size 1 are dropped.
-    Compact(HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)>),
+    Compact(HashMap<String, (IndexMap<String, Option<String>>, Vec<MergeBin>)>),
     /// Plan to Z-order each partition
     ZOrder(
         Vec<String>,
-        HashMap<String, (IndexMap<String, Scalar>, MergeBin)>,
+        HashMap<String, (IndexMap<String, Option<String>>, MergeBin)>,
     ),
     // TODO: Sort
 }
@@ -469,7 +455,7 @@ impl MergePlan {
     /// collected during the operation.
     async fn rewrite_files<F>(
         task_parameters: Arc<MergeTaskParameters>,
-        partition_values: IndexMap<String, Scalar>,
+        partition_values: IndexMap<String, Option<String>>,
         files: MergeBin,
         object_store: ObjectStoreRef,
         read_stream: F,
@@ -507,7 +493,10 @@ impl MergePlan {
         // Next, initialize the writer
         let writer_config = PartitionWriterConfig::try_new(
             task_parameters.file_schema.clone(),
-            partition_values.clone(),
+            // We don't let the PartitionWriter handle partition values since we
+            // (PolarSignals) use custom encoded partition values. They are set
+            // on add actions afterwards.
+            Default::default(),
             Some(task_parameters.writer_properties.clone()),
             Some(task_parameters.input_parameters.target_size as usize),
             None,
@@ -536,6 +525,11 @@ impl MergePlan {
 
         let add_actions = writer.close().await?.into_iter().map(|mut add| {
             add.data_change = false;
+            debug!(
+                "Adding partition values to add action: {partition_values:?}, path: {}",
+                add.path
+            );
+            add.partition_values = partition_values.clone().into_iter().collect();
 
             let size = add.size;
 
@@ -873,9 +867,14 @@ fn build_compaction_plan(
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     let mut metrics = Metrics::default();
 
-    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
-    for add in snapshot.get_active_add_actions_by_partitions(filters)? {
-        let add = add?;
+    assert!(
+        filters.is_empty(),
+        "Polar Signals custom bin packing code by partition does not support filters"
+    );
+
+    let mut partition_files: HashMap<String, (IndexMap<String, Option<String>>, Vec<Add>)> =
+        HashMap::new();
+    for add in snapshot.file_actions()?.into_iter() {
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&add)?;
         if (object_meta.size as i64) > target_size {
@@ -883,16 +882,19 @@ fn build_compaction_plan(
             continue;
         }
         let partition_values = add
-            .partition_values()?
+            .partition_values
+            .clone()
             .into_iter()
+            // IndexMap keeps keys in insertion order, so sort.
+            .sorted()
             .map(|(k, v)| (k.to_string(), v))
             .collect::<IndexMap<_, _>>();
 
         partition_files
-            .entry(add.partition_values()?.hive_partition_path())
+            .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, vec![]))
             .1
-            .push(add.add_action());
+            .push(add);
     }
 
     for (_, file) in partition_files.values_mut() {
@@ -900,7 +902,8 @@ fn build_compaction_plan(
         file.sort_by(|a, b| b.size.cmp(&a.size));
     }
 
-    let mut operations: HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
+    let mut operations: HashMap<String, (IndexMap<String, Option<String>>, Vec<MergeBin>)> =
+        HashMap::new();
     for (part, (partition, files)) in partition_files {
         let mut merge_bins = vec![MergeBin::new()];
 
@@ -976,13 +979,20 @@ fn build_zorder_plan(
 
     // For now, just be naive and optimize all files in each selected partition.
     let mut metrics = Metrics::default();
+    assert!(
+        filters.is_empty(),
+        "Polar Signals custom bin packing code by partition does not support filters"
+    );
 
-    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
-    for add in snapshot.get_active_add_actions_by_partitions(filters)? {
-        let add = add?;
+    let mut partition_files: HashMap<String, (IndexMap<String, Option<String>>, MergeBin)> =
+        HashMap::new();
+    for add in snapshot.file_actions()?.into_iter() {
         let partition_values = add
-            .partition_values()?
+            .partition_values
+            .clone()
             .into_iter()
+            // IndexMap keeps keys in insertion order, so sort.
+            .sorted()
             .map(|(k, v)| (k.to_string(), v))
             .collect::<IndexMap<_, _>>();
         metrics.total_considered_files += 1;
@@ -990,7 +1000,7 @@ fn build_zorder_plan(
             .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, MergeBin::new()))
             .1
-            .add(add.add_action());
+            .add(add);
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
@@ -1036,11 +1046,11 @@ pub(super) mod zorder {
         use super::*;
         use url::Url;
 
+        use arrow_schema::DataType;
         use ::datafusion::{
             execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder},
             prelude::{SessionConfig, SessionContext},
         };
-        use arrow_schema::DataType;
         use datafusion_common::DataFusionError;
         use datafusion_expr::{
             ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
@@ -1134,11 +1144,11 @@ pub(super) mod zorder {
         #[cfg(test)]
         mod tests {
             use super::*;
-            use ::datafusion::assert_batches_eq;
             use arrow_array::{Int32Array, StringArray};
             use arrow_ord::sort::sort_to_indices;
             use arrow_schema::Field;
             use arrow_select::take::take;
+            use ::datafusion::assert_batches_eq;
             use rand::Rng;
             #[test]
             fn test_order() {

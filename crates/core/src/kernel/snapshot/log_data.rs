@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use delta_kernel::expressions::{Scalar, StructData};
 use indexmap::IndexMap;
+use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use percent_encoding::percent_decode_str;
@@ -15,7 +16,7 @@ use crate::kernel::arrow::extract::{extract_and_cast, extract_and_cast_opt};
 use crate::kernel::{
     Add, DataType, DeletionVectorDescriptor, Metadata, Remove, StructField, StructType,
 };
-use crate::{DeltaResult, DeltaTableError};
+use crate::{DeltaResult, DeltaTableError, NULL_PARTITION_VALUE_DATA_PATH};
 
 const COL_NUM_RECORDS: &str = "numRecords";
 const COL_MIN_VALUES: &str = "minValues";
@@ -25,33 +26,97 @@ const COL_NULL_COUNT: &str = "nullCount";
 pub(crate) type PartitionFields<'a> = Arc<IndexMap<&'a str, &'a StructField>>;
 pub(crate) type PartitionValues<'a> = IndexMap<&'a str, Scalar>;
 
-pub(crate) trait PartitionsExt {
+pub fn is_range_partition_value(value: &str) -> bool {
+    value.starts_with("range[") && value.ends_with(']')
+}
+
+pub fn extract_range_bounds(value: &str) -> Option<(String, String)> {
+    if !is_range_partition_value(value) {
+        return None;
+    }
+
+    let inner = &value[6..value.len() - 1]; // Remove "range[" and "]"
+    let parts: Vec<&str> = inner.split(',').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    Some((parts[0].to_string(), parts[1].to_string()))
+}
+
+// Shared implementation for Scalar types
+fn hive_partition_path_scalar<K: std::fmt::Display>(map: &IndexMap<K, Scalar>) -> String {
+    let fields = map
+        .iter()
+        .map(|(k, v)| {
+            let encoded = v.serialize_encoded();
+            format!("{k}={encoded}")
+        })
+        .collect::<Vec<_>>();
+    fields.join("/")
+}
+
+// Shared implementation for Option<String> types
+fn hive_partition_path_option_string<'a, M>(map: &'a M) -> String
+where
+    &'a M: IntoIterator<Item = (&'a String, &'a Option<String>)>,
+{
+    let fields = map
+        .into_iter()
+        .sorted()
+        .map(|(k, v)| {
+            let value = match v {
+                Some(v) => {
+                    if is_range_partition_value(v) {
+                        // Optimistically parse to UTC timestamps. We should
+                        // change this if we have different range partition
+                        // value types.
+                        extract_range_bounds(v)
+                            .and_then(|(start, end)| {
+                                let start_ts =
+                                    start.parse::<i64>().ok().map(|i| Utc.timestamp_nanos(i))?;
+                                let end_ts =
+                                    end.parse::<i64>().ok().map(|i| Utc.timestamp_nanos(i))?;
+                                Some(format!("{start_ts:?}-{end_ts:?}"))
+                            })
+                            .unwrap_or_else(|| v.to_string())
+                    } else {
+                        v.to_string()
+                    }
+                }
+                None => NULL_PARTITION_VALUE_DATA_PATH.to_string(),
+            };
+            format!("{k}={value}")
+        })
+        .collect::<Vec<_>>();
+    fields.join("/")
+}
+
+pub trait PartitionsExt {
     fn hive_partition_path(&self) -> String;
 }
 
 impl PartitionsExt for IndexMap<&str, Scalar> {
     fn hive_partition_path(&self) -> String {
-        let fields = self
-            .iter()
-            .map(|(k, v)| {
-                let encoded = v.serialize_encoded();
-                format!("{k}={encoded}")
-            })
-            .collect::<Vec<_>>();
-        fields.join("/")
+        hive_partition_path_scalar(self)
     }
 }
 
 impl PartitionsExt for IndexMap<String, Scalar> {
     fn hive_partition_path(&self) -> String {
-        let fields = self
-            .iter()
-            .map(|(k, v)| {
-                let encoded = v.serialize_encoded();
-                format!("{k}={encoded}")
-            })
-            .collect::<Vec<_>>();
-        fields.join("/")
+        hive_partition_path_scalar(self)
+    }
+}
+
+impl PartitionsExt for IndexMap<String, Option<String>> {
+    fn hive_partition_path(&self) -> String {
+        hive_partition_path_option_string(self)
+    }
+}
+
+impl PartitionsExt for HashMap<String, Option<String>> {
+    fn hive_partition_path(&self) -> String {
+        hive_partition_path_option_string(self)
     }
 }
 
@@ -501,7 +566,7 @@ impl<'a> Iterator for FileStatsAccessor<'a> {
             return None;
         }
         // Safety: we know that the pointer is within bounds
-        let file_stats = self.get(self.pointer).unwrap();
+        let file_stats = FileStatsAccessor::get(self, self.pointer).unwrap();
         self.pointer += 1;
         Some(file_stats)
     }
