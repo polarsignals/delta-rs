@@ -16,7 +16,7 @@ use crate::kernel::arrow::extract::{extract_and_cast, extract_and_cast_opt};
 use crate::kernel::{
     Add, DataType, DeletionVectorDescriptor, Metadata, Remove, StructField, StructType,
 };
-use crate::{DeltaResult, DeltaTableError, NULL_PARTITION_VALUE_DATA_PATH};
+use crate::{DeltaResult, DeltaTableError};
 
 const COL_NUM_RECORDS: &str = "numRecords";
 const COL_MIN_VALUES: &str = "minValues";
@@ -84,7 +84,7 @@ where
                         v.to_string()
                     }
                 }
-                None => NULL_PARTITION_VALUE_DATA_PATH.to_string(),
+                None => "NULL".to_string(),
             };
             format!("{k}={value}")
         })
@@ -617,13 +617,13 @@ mod datafusion {
     use std::collections::HashSet;
     use std::sync::{Arc, LazyLock};
 
-    use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
-    use ::datafusion::physical_optimizer::pruning::PruningStatistics;
-    use ::datafusion::physical_plan::Accumulator;
     use arrow::compute::concat_batches;
     use arrow_arith::aggregate::sum;
     use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
+    use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
+    use ::datafusion::physical_optimizer::pruning::PruningStatistics;
+    use ::datafusion::physical_plan::Accumulator;
     use datafusion_common::scalar::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_common::Column;
