@@ -207,6 +207,7 @@ impl DeltaWriter {
                 let config = PartitionWriterConfig::try_new(
                     self.config.file_schema(),
                     partition_values.clone(),
+                    None,
                     Some(self.config.writer_properties.clone()),
                     Some(self.config.target_file_size),
                     Some(self.config.write_batch_size),
@@ -278,16 +279,22 @@ pub struct PartitionWriterConfig {
 }
 
 impl PartitionWriterConfig {
-    /// Create a new instance of [PartitionWriterConfig]
+    /// Create a new instance of [PartitionWriterConfig].
     pub fn try_new(
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
+        path_prefix: Option<&str>,
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<usize>,
         write_batch_size: Option<usize>,
     ) -> DeltaResult<Self> {
-        let part_path = partition_values.hive_partition_path();
-        let prefix = Path::parse(part_path)?;
+        let prefix = match path_prefix {
+            Some(prefix) => Path::parse(prefix),
+            None => {
+                let part_path = partition_values.hive_partition_path();
+                Path::parse(part_path)
+            }
+        }?;
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
                 .set_created_by(format!("delta-rs version {}", crate_version()))
@@ -523,6 +530,7 @@ mod tests {
         let config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),
+            None,
             writer_properties,
             target_file_size,
             write_batch_size,

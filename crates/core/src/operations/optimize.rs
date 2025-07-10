@@ -497,6 +497,9 @@ impl MergePlan {
             // (PolarSignals) use custom encoded partition values. They are set
             // on add actions afterwards.
             Default::default(),
+            // But we do pass in the hive partition path as the path prefix at
+            // least.
+            Some(&partition_values.hive_partition_path()),
             Some(task_parameters.writer_properties.clone()),
             Some(task_parameters.input_parameters.target_size as usize),
             None,
@@ -529,7 +532,6 @@ impl MergePlan {
                 "Adding partition values to add action: {partition_values:?}, path: {}",
                 add.path
             );
-            add.path = [partition_values.hive_partition_path(), add.path].join("/");
             add.partition_values = partition_values.clone().into_iter().collect();
 
             let size = add.size;
