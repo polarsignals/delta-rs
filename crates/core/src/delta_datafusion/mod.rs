@@ -1227,19 +1227,8 @@ fn parse_timestamp(
         _ => stat_val.to_string(),
     };
 
-    let time_micro = ScalarValue::try_from_string(
-        string,
-        &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-    )?;
-    let cast_arr = cast_with_options(
-        &time_micro.to_array()?,
-        field_dt,
-        &CastOptions {
-            safe: false,
-            ..Default::default()
-        },
-    )?;
-    ScalarValue::try_from_array(&cast_arr, 0)
+    let time_arr = ScalarValue::try_from_string(string, field_dt)?.to_array()?;
+    ScalarValue::try_from_array(&time_arr, 0)
 }
 
 pub(crate) fn to_correct_scalar_value(

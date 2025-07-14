@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{Array, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use delta_kernel::expressions::{Scalar, StructData};
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -68,17 +68,8 @@ where
             let value = match v {
                 Some(v) => {
                     if is_range_partition_value(v) {
-                        // Optimistically parse to UTC timestamps. We should
-                        // change this if we have different range partition
-                        // value types.
                         extract_range_bounds(v)
-                            .and_then(|(start, end)| {
-                                let start_ts =
-                                    start.parse::<i64>().ok().map(|i| Utc.timestamp_nanos(i))?;
-                                let end_ts =
-                                    end.parse::<i64>().ok().map(|i| Utc.timestamp_nanos(i))?;
-                                Some(format!("{start_ts:?}-{end_ts:?}"))
-                            })
+                            .and_then(|(start, end)| Some(format!("{start}-{end}")))
                             .unwrap_or_else(|| v.to_string())
                     } else {
                         v.to_string()
