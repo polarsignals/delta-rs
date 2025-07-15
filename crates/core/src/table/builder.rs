@@ -38,6 +38,14 @@ pub struct DeltaTableConfig {
     /// Hence, DeltaTable will be loaded with significant memory reduction.
     pub require_files: bool,
 
+    /// Parse stats from JSON to parquet in the commit log on table updates.
+    /// This defaults to `false`
+    ///
+    /// Before setting to `true`, consider setting up the writer to write
+    /// parsed stats in checkpoint files rather than pushing the parsing burden
+    /// to the read path.
+    pub parse_stats: bool,
+
     /// Controls how many files to buffer from the commit log when updating the table.
     /// This defaults to 4 * number of cpus
     ///
@@ -61,6 +69,10 @@ impl Default for DeltaTableConfig {
     fn default() -> Self {
         Self {
             require_files: true,
+            // This is set to false for our PolarSignals specific use case since
+            // our tables so far do not use parsed stats. They may do so in the
+            // future.
+            parse_stats: false,
             log_buffer_size: num_cpus::get() * 4,
             log_batch_size: 1024,
             io_runtime: None,

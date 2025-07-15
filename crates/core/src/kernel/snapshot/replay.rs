@@ -108,7 +108,7 @@ fn map_batch(
 
     let stats = ex::extract_and_cast_opt::<StringArray>(&batch, "add.stats");
     let stats_parsed_col = ex::extract_and_cast_opt::<StructArray>(&batch, "add.stats_parsed");
-    if stats_parsed_col.is_none() && stats.is_some() {
+    if stats_parsed_col.is_none() && stats.is_some() && config.parse_stats {
         new_batch = parse_stats(new_batch, stats_schema, config)?;
     }
 
